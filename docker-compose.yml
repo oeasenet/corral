@@ -1,0 +1,52 @@
+# corral: self-hosted GitHub Actions runners on one Docker host, run by a single container.
+#
+#   cp .env.example .env      # set GITHUB_OWNER and GITHUB_PAT
+#   docker compose up -d
+#   open http://127.0.0.1:8080
+#
+# Pools, runner counts, runtimes, labels, images, ephemeral mode… are changed live in
+# the dashboard; the RUNNER_* values below only seed the first pool on the first start.
+
+services:
+    corral:
+        image: ghcr.io/oeasenet/corral:${IMAGE_TAG:-latest}
+        restart: unless-stopped
+        environment:
+            - TZ=${TZ:-UTC}
+            - GITHUB_OWNER=${GITHUB_OWNER:?set GITHUB_OWNER in .env}
+            - GITHUB_PAT=${GITHUB_PAT:?set GITHUB_PAT in .env}
+            # Optional: leave empty for an unauthenticated dashboard (fine behind a firewall).
+            - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+            # Initial values only; the UI owns them after the first start.
+            - RUNNER_COUNT=${RUNNER_COUNT:-2}
+            - RUNNER_LABELS=${RUNNER_LABELS:-}
+            # ubuntu (26.04), debian (13) or minideb (Debian 13); more pools are added in the UI.
+            - RUNNER_RUNTIME=${RUNNER_RUNTIME:-ubuntu}
+            # Optional image override for the first pool (blank = ghcr.io/oeasenet/corral/runner:<runtime>).
+            - RUNNER_IMAGE=${RUNNER_IMAGE:-}
+            # Keep runners on the latest image: pull pool images every UPDATE_CHECK_INTERVAL
+            # and replace idle runners built from an older one.
+            - AUTO_UPDATE=${AUTO_UPDATE:-true}
+            - UPDATE_CHECK_INTERVAL=${UPDATE_CHECK_INTERVAL:-1h}
+            # Only needed when the runner images are in a private registry.
+            - REGISTRY_USERNAME=${REGISTRY_USERNAME:-}
+            - REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-}
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - corral-data:/data
+        ports:
+            # Dashboard. BIND_ADDR=0.0.0.0 makes it reachable from your network (behind a firewall),
+            # 127.0.0.1 keeps it local-only.
+            - "${BIND_ADDR:-0.0.0.0}:${PORT:-8080}:8080"
+        healthcheck:
+            test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8080/health" ]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        labels:
+            # Safe to auto-update: runners keep working while the controller restarts.
+            - com.centurylinklabs.watchtower.enable=true
+
+volumes:
+    corral-data:

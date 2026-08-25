@@ -1,0 +1,151 @@
+name: Build and Push Images
+
+# Builds the controller (ghcr.io/<owner>/corral) and every runner flavor found in
+# images/*/flavor.json (ghcr.io/<owner>/corral/runner:<flavor>) for linux/amd64 and
+# linux/arm64. Adding a flavor directory is enough; nothing here needs editing.
+#   push to main      -> controller + every runner flavor
+#   tag vX.Y.Z        -> same, with version tags
+#   every 6 hours     -> runner flavors, only when the latest actions/runner release has no image yet
+#   Mondays 04:17 UTC -> runner flavors, always (fresh base images, OS patches)
+#   manual            -> everything, optionally with a specific actions/runner version
+# Tests run locally with `make test`.
+
+on:
+    push:
+        branches: [ main ]
+        tags: [ 'v*.*.*' ]
+        paths-ignore: [ 'docs/**', '**.md' ]
+    workflow_dispatch:
+        inputs:
+            runner_version:
+                description: 'actions/runner version to build (blank = latest release)'
+                required: false
+                default: ''
+    schedule:
+        -   cron: '17 */6 * * *'
+        -   cron: '17 4 * * 1'
+
+permissions:
+    contents: read
+    packages: write
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    plan:
+        name: Plan
+        runs-on: ubuntu-latest
+        outputs:
+            runner_version: ${{ steps.plan.outputs.runner_version }}
+            build: ${{ steps.plan.outputs.build }}
+            matrix: ${{ steps.plan.outputs.matrix }}
+        steps:
+            -   uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            -   uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+                with:
+                    registry: ghcr.io
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
+
+            -   name: Decide what to build
+                id: plan
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    REQUESTED: ${{ inputs.runner_version }}
+                    EVENT: ${{ github.event_name }}
+                    SCHEDULE: ${{ github.event.schedule }}
+                    OWNER: ${{ github.repository_owner }}
+                run: |
+                    if [ -n "$REQUESTED" ]; then
+                        version="${REQUESTED#v}"
+                    else
+                        version=$(gh api repos/actions/runner/releases/latest --jq '.tag_name' | sed 's/^v//')
+                    fi
+                    echo "runner_version=${version}" >> "$GITHUB_OUTPUT"
+
+                    default=$(scripts/flavors.sh list | head -n1)
+                    controller=true; runner=true; reason="$EVENT"
+                    if [ "$EVENT" = schedule ]; then
+                        controller=false
+                        if [ "$SCHEDULE" = '17 4 * * 1' ]; then
+                            reason="weekly refresh"
+                        elif docker manifest inspect "ghcr.io/${OWNER}/corral/runner:${default}-${version}" >/dev/null 2>&1; then
+                            runner=false; reason="runner ${version} is already built"
+                        else
+                            reason="new actions/runner release ${version}"
+                        fi
+                    fi
+
+                    entries=""
+                    if [ "$controller" = true ]; then
+                        entries='{"name":"controller","image":"controller","flavor":"","base":"","default":true,"tag_prefix":"","context":".","dockerfile":"controller/Dockerfile","images":"ghcr.io/'"$OWNER"'/corral"}'
+                    fi
+                    if [ "$runner" = true ]; then
+                        flavors=$(scripts/flavors.sh matrix | python3 -c 'import json,sys,os; o=os.environ["OWNER"]; print(",".join(json.dumps(dict(e, context="images", images=f"ghcr.io/{o}/corral/runner")) for e in json.load(sys.stdin)))')
+                        entries="${entries:+$entries,}$flavors"
+                    fi
+                    if [ -n "$entries" ]; then build=true; else build=false; fi
+                    echo "build=${build}" >> "$GITHUB_OUTPUT"
+                    echo "matrix={\"include\":[${entries}]}" >> "$GITHUB_OUTPUT"
+                    echo "::notice::${reason}: build=${build}, actions/runner ${version}"
+
+    build:
+        name: ${{ matrix.name }}
+        needs: plan
+        if: needs.plan.outputs.build == 'true'
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+        steps:
+            -   uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            -   uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+            -   uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+            -   uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+                with:
+                    registry: ghcr.io
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
+
+            -   name: Image metadata
+                id: meta
+                uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+                env:
+                    DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+                with:
+                    images: ${{ matrix.images }}
+                    tags: |
+                        type=ref,event=branch,enable=${{ matrix.image == 'controller' }}
+                        type=raw,value=${{ matrix.flavor || 'none' }},enable=${{ matrix.image == 'runner' && github.ref == 'refs/heads/main' }}
+                        type=raw,value=${{ matrix.flavor || 'none' }}-${{ needs.plan.outputs.runner_version }},enable=${{ matrix.image == 'runner' && github.ref == 'refs/heads/main' }}
+                        type=sha,prefix=${{ matrix.tag_prefix }}sha-
+                        type=semver,pattern={{version}},prefix=${{ matrix.tag_prefix }}
+                        type=semver,pattern={{major}}.{{minor}},prefix=${{ matrix.tag_prefix }}
+                        type=raw,value=latest,enable=${{ matrix.default && github.ref == 'refs/heads/main' }}
+                    labels: |
+                        org.opencontainers.image.licenses=Apache-2.0
+
+            -   name: Build and push
+                uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+                with:
+                    context: ${{ matrix.context }}
+                    file: ${{ matrix.dockerfile }}
+                    platforms: linux/amd64,linux/arm64
+                    push: true
+                    tags: ${{ steps.meta.outputs.tags }}
+                    labels: ${{ steps.meta.outputs.labels }}
+                    annotations: ${{ steps.meta.outputs.annotations }}
+                    build-args: |
+                        VERSION=${{ steps.meta.outputs.version }}
+                        GITHUB_RUNNER_VERSION=${{ needs.plan.outputs.runner_version }}
+                        BASE_IMAGE=${{ matrix.base || 'ubuntu:26.04' }}
+                        FLAVOR=${{ matrix.flavor || 'ubuntu' }}
+                    cache-from: type=gha,scope=${{ matrix.name }}
+                    cache-to: type=gha,scope=${{ matrix.name }},mode=max
+                    provenance: false
+                    sbom: false

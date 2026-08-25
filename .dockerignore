@@ -1,0 +1,11 @@
+.git
+.idea
+docs
+*.md
+controller/*_test.go
+images/test
+images/entrypoint.sh
+images/apt-install
+images/Dockerfile*
+images/*/Dockerfile
+images/.dockerignore

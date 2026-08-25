@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>corral · {{.Target}}</title>
+<style>
+:root {
+    --bg: #ffffff; --fg: #141414; --fg-2: #5c5c5c; --fg-3: #8f8f8f; --line: #e4e4e4; --panel: #fafafa;
+    --accent: #141414; --ok: #3a9d5d; --busy: #2b6cb0; --warn: #d29a2a; --bad: #c9403d; --mute: #b5b5b5;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--fg); background: var(--bg); line-height: 1.45; -webkit-font-smoothing: antialiased; }
+main { max-width: 1040px; margin: 0 auto; padding: 36px 24px 72px; }
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--mute); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--fg); }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+h1 { font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1rem; font-weight: 600; }
+header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .sub { color: var(--fg-2); margin-top: 2px; }
+header .meta { display: flex; gap: 18px; align-items: center; color: var(--fg-2); flex-wrap: wrap; }
+header .meta label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.notice { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--warn); background: var(--panel); color: var(--fg-2); }
+.notice.bad { border-left-color: var(--bad); }
+section.pool { margin-top: 28px; border: 1px solid var(--line); border-radius: 6px; }
+.pool .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
+.pool .head .title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.pool .head .title h2 { font-size: 1.05rem; }
+.badge { display: inline-block; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--fg-2); font-size: 0.82rem; }
+.pool .head .image { color: var(--fg-3); font-size: 0.85rem; }
+.pool .head .actions { display: flex; align-items: center; gap: 6px; }
+.count { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.count span { min-width: 2.6em; text-align: center; padding: 0 6px; }
+.count button { border: 0; border-left: 1px solid var(--line); background: transparent; padding: 4px 9px; }
+.count button:first-child { border-left: 0; border-right: 1px solid var(--line); }
+button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--fg-3); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary:hover { opacity: 0.9; }
+button.quiet { border-color: transparent; color: var(--fg-2); }
+button.quiet:hover { border-color: var(--line); color: var(--fg); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: 0.45; cursor: default; }
+.pool .body, section.orphans section.pool { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; border-top: 1px solid var(--line); }
+th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+th { color: var(--fg-3); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+td.actions { text-align: right; }
+td .actions-inline { display: inline-flex; gap: 4px; }
+tr:last-child td { border-bottom: 0; }
+.empty { color: var(--fg-3); padding: 12px 16px; border-top: 1px solid var(--line); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); margin-right: 7px; vertical-align: 1px; }
+.dot.ok { background: var(--ok); } .dot.busy { background: var(--busy); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.tag { color: var(--fg-3); font-size: 0.85rem; margin-left: 6px; }
+details.settings { border-top: 1px solid var(--line); }
+details.settings summary { padding: 10px 16px; color: var(--fg-2); cursor: pointer; list-style: none; }
+details.settings summary::before { content: "▸ "; color: var(--fg-3); }
+details[open].settings summary::before { content: "▾ "; }
+form.pool-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 20px; padding: 4px 16px 16px; }
+form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--fg-2); }
+form label.check { flex-direction: row; align-items: center; gap: 8px; }
+form input[type=text], form input[type=number], form select, form textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--fg); background: var(--bg); }
+form input:focus, form select:focus, form textarea:focus { outline: none; border-color: var(--fg-3); }
+form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-height: 56px; }
+form .full { grid-column: 1 / -1; }
+form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hint { color: var(--fg-3); font-size: 0.8rem; font-weight: 400; }
+section.add { margin-top: 28px; }
+form.add-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+form.add-form label { min-width: 160px; }
+section.orphans, section.events { margin-top: 32px; }
+section.events h2 { margin-bottom: 8px; }
+.events-list { border: 1px solid var(--line); border-radius: 6px; max-height: 320px; overflow-y: auto; font-size: 0.88rem; }
+.events-list div { display: flex; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--line); }
+.events-list div:last-child { border-bottom: 0; }
+.events-list time { color: var(--fg-3); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; padding-top: 2px; }
+.events-list .WARN { color: var(--warn); } .events-list .ERROR { color: var(--bad); }
+footer { margin-top: 40px; color: var(--fg-3); font-size: 0.82rem; }
+#toast { position: fixed; bottom: 20px; right: 20px; background: var(--fg); color: #fff; padding: 10px 14px; border-radius: 6px; display: none; max-width: 420px; font-size: 0.9rem; }
+#toast.bad { background: var(--bad); }
+@media (max-width: 640px) { th:nth-child(4), td:nth-child(4) { display: none; } main { padding: 24px 14px 56px; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+    <div>
+        <h1>corral</h1>
+        <div class="sub">runners for <a href="{{.GitHubURL}}">{{.Target}}</a></div>
+    </div>
+    <div class="meta" id="meta"></div>
+</header>
+<div id="notices"></div>
+<div id="pools"></div>
+<section class="add">
+    <form class="add-form" id="add-pool">
+        <label>New pool <input type="text" name="name" placeholder="name (a-z, 0-9, -)" required pattern="[a-z0-9][a-z0-9-]{0,23}"></label>
+        <label>Runtime <select name="runtime" id="add-runtime"></select></label>
+        <label>Runners <input type="number" name="count" min="0" max="200" value="1"></label>
+        <button type="submit">Add pool</button>
+    </form>
+</section>
+<section class="orphans" id="orphans" hidden></section>
+<section class="events">
+    <h2>Events</h2>
+    <div class="events-list" id="events"></div>
+</section>
+<footer>corral {{.Version}} · <a href="https://github.com/oeasenet/corral">source</a></footer>
+</main>
+<div id="toast" role="status"></div>
+<noscript><p style="padding:24px">This dashboard needs JavaScript.</p></noscript>
+<script>
+const INITIAL = {{.StateJSON}};
+const $ = (s, el) => (el || document).querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let current = INITIAL;
+
+function toast(msg, bad) {
+    const el = $('#toast'); el.textContent = msg; el.className = bad ? 'bad' : ''; el.style.display = 'block';
+    clearTimeout(el._t); el._t = setTimeout(() => el.style.display = 'none', 4000);
+}
+async function call(method, path, body) {
+    const res = await fetch(path, {method, headers: body ? {'Content-Type': 'application/json'} : {}, body: body ? JSON.stringify(body) : undefined});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || (res.status + ' ' + res.statusText));
+    return data;
+}
+async function act(method, path, msg, body) {
+    try { await call(method, path, body); if (msg) toast(msg); setTimeout(refresh, 700); } catch (e) { toast(e.message, true); }
+}
+function age(iso) {
+    if (!iso || iso.startsWith('0001')) return 'never';
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return Math.floor(s) + 's'; if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 172800) return Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm'; return Math.floor(s / 86400) + 'd';
+}
+const dot = (cls, text) => '<span class="dot ' + cls + '"></span>' + esc(text);
+
+function runnerRow(r) {
+    let state = r.state === 'running' ? dot(r.health === 'unhealthy' ? 'bad' : r.health === 'starting' ? 'warn' : 'ok', r.health ? 'running · ' + r.health : 'running') : dot('warn', r.state);
+    let gh = r.github_status === 'online' ? dot(r.busy ? 'busy' : 'ok', r.busy ? 'busy' : 'idle') : r.github_status === 'offline' ? dot('bad', 'offline') : dot('', r.github_status);
+    let ver = r.runner_version ? '<span class="mono">' + esc(r.runner_version) + '</span>' : '<span class="mono">' + esc((r.generation || '').slice(0, 8)) + '</span>';
+    if (r.stale) ver += '<span class="tag">outdated</span>';
+    if (r.draining) ver += '<span class="tag">draining · ' + esc(r.drain_reason) + '</span>';
+    if (r.ephemeral) ver += '<span class="tag">ephemeral</span>';
+    const actions = r.draining ? '' : '<span class="actions-inline">' +
+        '<button class="quiet" data-runner="' + esc(r.name) + '" data-action="recreate">Recreate</button>' +
+        '<button class="quiet danger" data-runner="' + esc(r.name) + '" data-action="destroy">Destroy</button></span>';
+    return '<tr><td class="mono">' + esc(r.name) + '</td><td>' + state + '</td><td>' + gh + '</td><td>' + age(r.created) + '</td><td>' + ver + '</td><td class="actions">' + actions + '</td></tr>';
+}
+const TABLE_HEAD = '<thead><tr><th>Runner</th><th>Container</th><th>GitHub</th><th>Age</th><th>Runner version</th><th></th></tr></thead>';
+
+function runtimeOptions(selected) {
+    return (current.runtimes || []).map(rt => '<option value="' + esc(rt.name) + '"' + (rt.name === selected ? ' selected' : '') + '>' + esc(rt.label) + '</option>').join('');
+}
+function poolForm(p) {
+    return '<form class="pool-form" data-pool="' + esc(p.name) + '">' +
+        '<label>Runtime <select name="runtime">' + runtimeOptions(p.runtime) + '</select></label>' +
+        '<label>Image override <span class="hint">empty = image of the runtime; pin e.g. …:ubuntu-2.336.0</span><input type="text" name="image" value="' + esc(p.image) + '"></label>' +
+        '<label>Labels <span class="hint">comma-separated; OS labels are added automatically</span><input type="text" name="labels" value="' + esc(p.labels) + '"></label>' +
+        '<label>Runner group <span class="hint">organization runners only</span><input type="text" name="group" value="' + esc(p.group) + '"></label>' +
+        '<label>Graceful stop (seconds) <input type="number" name="graceful_stop_seconds" min="0" value="' + esc(p.graceful_stop_seconds) + '"></label>' +
+        '<label>Host work directory base <span class="hint">optional; enables volume mounts inside jobs</span><input type="text" name="work_base" value="' + esc(p.work_base) + '"></label>' +
+        '<label class="full">Extra environment <span class="hint">KEY=value per line</span><textarea name="extra_env">' + esc(p.extra_env) + '</textarea></label>' +
+        '<label class="check"><input type="checkbox" name="docker_socket"' + (p.docker_socket ? ' checked' : '') + '> Mount the host Docker socket</label>' +
+        '<label class="check"><input type="checkbox" name="ephemeral"' + (p.ephemeral ? ' checked' : '') + '> Ephemeral (one job per container)</label>' +
+        '<div class="row"><button type="submit" class="primary">Save</button><button type="button" class="danger" data-delete="' + esc(p.name) + '">Delete pool</button><span class="hint">Changes that reshape runners roll them one at a time.</span></div></form>';
+}
+function poolHead(p) {
+    const latest = current.latest_runner_version;
+    let ver = p.runner_version ? 'runner ' + esc(p.runner_version) + (latest && latest !== p.runner_version ? ' <span class="tag">' + esc(latest) + ' available, image pending</span>' : latest ? ' <span class="tag">latest</span>' : '') : '';
+    return '<div class="title"><h2>' + esc(p.name) + '</h2><span class="badge">' + esc((current.runtimes.find(r => r.name === p.runtime) || {}).label || p.runtime) + '</span>' +
+        '<span class="image mono">' + esc(p.effective_image) + '</span>' + (ver ? '<span class="image">' + ver + '</span>' : '') + '</div>' +
+        '<div class="actions"><span class="hint">' + p.running + ' running' + (p.busy ? ', ' + p.busy + ' busy' : '') + '</span>' +
+        '<span class="count"><button data-scale="-1" data-pool="' + esc(p.name) + '" title="One runner fewer">−</button><span title="Desired runners">' + p.count + '</span><button data-scale="1" data-pool="' + esc(p.name) + '" title="One runner more">+</button></span>' +
+        '<button class="quiet" data-pull="' + esc(p.name) + '">Pull &amp; roll</button></div>';
+}
+function renderPools(st) {
+    const root = $('#pools');
+    const seen = new Set();
+    for (const p of st.pools) {
+        seen.add(p.name);
+        let sec = root.querySelector('section[data-pool="' + CSS.escape(p.name) + '"]');
+        if (!sec) {
+            sec = document.createElement('section');
+            sec.className = 'pool'; sec.dataset.pool = p.name;
+            sec.innerHTML = '<div class="head"></div><div class="body"></div><details class="settings"><summary>Pool settings</summary>' + poolForm(p) + '</details>';
+            root.appendChild(sec);
+        }
+        $('.head', sec).innerHTML = poolHead(p);
+        $('.body', sec).innerHTML = p.runners.length ? '<table>' + TABLE_HEAD + '<tbody>' + p.runners.map(runnerRow).join('') + '</tbody></table>' : '<div class="empty">' + (p.count ? 'Starting runners…' : 'No runners; raise the count to start some.') + '</div>';
+    }
+    for (const sec of [...root.querySelectorAll('section.pool')]) if (!seen.has(sec.dataset.pool)) sec.remove();
+    if (!st.pools.length) root.innerHTML = '<div class="notice">No pools yet. Add one below.</div>';
+}
+function render(st) {
+    current = st;
+    $('#meta').innerHTML = '<span>last reconcile ' + esc(age(st.last_pass)) + ' ago</span>' +
+        (st.latest_runner_version ? '<span>latest runner <span class="mono">' + esc(st.latest_runner_version) + '</span></span>' : '') +
+        '<label><input type="checkbox" id="auto-update"' + (st.auto_update ? ' checked' : '') + '> auto-update every ' + esc(st.update_check_interval) + '</label>' +
+        '<button class="quiet" id="pull-all">Pull all</button><button class="quiet" id="reconcile">Reconcile</button>';
+    let notices = '';
+    if (st.docker_error) notices += '<div class="notice bad">Docker: ' + esc(st.docker_error) + '</div>';
+    if (st.github_error) notices += '<div class="notice">GitHub API unavailable (runner status unknown, scaling continues): ' + esc(st.github_error) + '</div>';
+    if (st.pulling) notices += '<div class="notice">Pulling images…</div>';
+    $('#notices').innerHTML = notices;
+    renderPools(st);
+    const sel = $('#add-runtime');
+    if (!sel.options.length) sel.innerHTML = runtimeOptions('ubuntu');
+    const orphans = $('#orphans');
+    if (st.orphans && st.orphans.length) {
+        orphans.hidden = false;
+        orphans.innerHTML = '<h2>Retiring</h2><p class="hint">Runners of removed pools; they stop as they go idle.</p><section class="pool"><table>' + TABLE_HEAD + '<tbody>' + st.orphans.map(runnerRow).join('') + '</tbody></table></section>';
+    } else { orphans.hidden = true; orphans.innerHTML = ''; }
+    $('#events').innerHTML = (st.events || []).map(e => '<div><time>' + new Date(e.time).toLocaleTimeString() + '</time><span class="' + esc(e.level) + '">' + esc(e.message) + '</span></div>').join('') || '<div class="hint">Nothing yet.</div>';
+}
+async function refresh() { try { render(await call('GET', '/api/state')); } catch (e) { console.error(e); } }
+
+document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.scale) act('POST', '/api/pools/' + encodeURIComponent(b.dataset.pool) + '/scale', 'Desired count changed', {delta: parseInt(b.dataset.scale, 10)});
+    else if (b.dataset.pull) act('POST', '/api/pools/' + encodeURIComponent(b.dataset.pull) + '/pull', 'Pulling; outdated runners roll as they go idle');
+    else if (b.dataset.runner) {
+        if (b.dataset.action === 'destroy' && !confirm('Destroy ' + b.dataset.runner + ' and lower its pool by one?')) return;
+        act('POST', '/api/runners/' + encodeURIComponent(b.dataset.runner) + '/' + b.dataset.action, b.dataset.runner + ': ' + b.dataset.action);
+    } else if (b.dataset.delete) {
+        if (!confirm('Delete pool ' + b.dataset.delete + '? Its runners retire as they go idle.')) return;
+        act('DELETE', '/api/pools/' + encodeURIComponent(b.dataset.delete), 'Pool removed');
+    } else if (b.id === 'pull-all') act('POST', '/api/pull', 'Pulling all images');
+    else if (b.id === 'reconcile') act('POST', '/api/reconcile', 'Reconciling');
+});
+document.addEventListener('change', (ev) => {
+    if (ev.target.id === 'auto-update') act('PUT', '/api/settings', 'Automatic updates ' + (ev.target.checked ? 'on' : 'off'), {auto_update: ev.target.checked});
+});
+document.addEventListener('submit', (ev) => {
+    const f = ev.target; ev.preventDefault();
+    if (f.id === 'add-pool') {
+        act('PUT', '/api/pools/' + encodeURIComponent(f.name.value.trim()), 'Pool added', {runtime: f.runtime.value, count: parseInt(f.count.value, 10)});
+        f.reset();
+    } else if (f.classList.contains('pool-form')) {
+        act('PUT', '/api/pools/' + encodeURIComponent(f.dataset.pool), 'Pool saved', {
+            runtime: f.runtime.value, image: f.image.value, labels: f.labels.value, group: f.group.value,
+            graceful_stop_seconds: parseInt(f.graceful_stop_seconds.value, 10) || 0, work_base: f.work_base.value,
+            extra_env: f.extra_env.value, docker_socket: f.docker_socket.checked, ephemeral: f.ephemeral.checked,
+        });
+    }
+});
+render(INITIAL);
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

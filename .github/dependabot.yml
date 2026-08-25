@@ -1,0 +1,23 @@
+# Keeps base images, GitHub Actions and Go modules current automatically.
+# Merged PRs trigger the image build workflow, so production stays on latest.
+version: 2
+updates:
+    -   package-ecosystem: github-actions
+        directory: /
+        schedule:
+            interval: weekly
+        groups:
+            actions:
+                patterns: [ "*" ]
+
+    -   package-ecosystem: docker
+        directories:
+            - /controller
+            - /images
+        schedule:
+            interval: weekly
+
+    -   package-ecosystem: gomod
+        directory: /controller
+        schedule:
+            interval: weekly

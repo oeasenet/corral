@@ -1,0 +1,19 @@
+#!/bin/sh
+# apt-get update + install with retries, then drop the package lists.
+# Mirrors occasionally serve an index that is ahead of their pool (404 on a
+# .deb); re-running update+install after a pause gets past that.
+set -eu
+attempt=1
+while :; do
+    if apt-get update && apt-get install -y --no-install-recommends "$@"; then
+        break
+    fi
+    if [ "$attempt" -ge 3 ]; then
+        echo "apt-install: giving up after $attempt attempts" >&2
+        exit 1
+    fi
+    echo "apt-install: attempt $attempt failed; retrying in 20s" >&2
+    attempt=$((attempt + 1))
+    sleep 20
+done
+rm -rf /var/lib/apt/lists/*
