@@ -32,14 +32,54 @@ better fit.
 
 ## Quick start
 
-On a host with Docker Engine and Compose v2:
+Two images, published to GHCR and Docker Hub — use whichever registry you prefer:
+
+|            | GHCR                                       | Docker Hub                       |
+|------------|--------------------------------------------|----------------------------------|
+| controller | `ghcr.io/oeasenet/corral`                  | `oease/corral`                   |
+| runners    | `ghcr.io/oeasenet/corral/runner:<flavor>`  | `oease/corral-runner:<flavor>`   |
+
+On a host with Docker Engine and Compose v2, put these two files in a directory:
+
+`compose.yaml`
+
+```yaml
+services:
+  corral:
+    image: ghcr.io/oeasenet/corral:latest    # or: oease/corral:latest
+    restart: unless-stopped
+    environment:
+      GITHUB_OWNER: ${GITHUB_OWNER}          # organization; for a single repository use RUNNER_REGISTER_TO=owner/repo
+      GITHUB_PAT: ${GITHUB_PAT}              # token that can manage self-hosted runners (see below)
+      # ADMIN_PASSWORD: ${ADMIN_PASSWORD}    # optional dashboard login (user: admin)
+      # RUNNER_COUNT: "2"                    # first pool's size; everything else is changed in the dashboard
+      # RUNNER_IMAGE: oease/corral-runner:ubuntu   # pull runner images from Docker Hub instead of GHCR
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - corral-data:/data
+    ports:
+      - "8080:8080"                          # dashboard; "127.0.0.1:8080:8080" keeps it local to the host
+
+volumes:
+  corral-data:
+```
+
+`.env`
+
+```
+GITHUB_OWNER=your-org
+GITHUB_PAT=ghp_your_token
+```
+
+Then:
 
 ```bash
-git clone https://github.com/oeasenet/corral.git && cd corral
-cp .env.example .env          # set GITHUB_OWNER and GITHUB_PAT
-docker compose up -d          # or: make up
+docker compose up -d
 open http://<host>:8080       # the dashboard
 ```
+
+Prefer the repository's fuller `docker-compose.yml` (every option as an `.env` variable, `make` helpers)?
+`git clone https://github.com/oeasenet/corral.git && cd corral && cp .env.example .env && docker compose up -d`.
 
 `GITHUB_PAT` must be allowed to manage self-hosted runners for `GITHUB_OWNER`: a classic token with
 `admin:org` (organization runners) or `repo` (repository runners), or a fine-grained token with the
@@ -154,12 +194,12 @@ GET    /health
 
 ## Runner images
 
-`ghcr.io/oeasenet/corral/runner:<flavor>` is the latest build of a flavor; `<flavor>-<runner version>`
-(e.g. `ubuntu-2.336.0`) pins the `actions/runner` release; `latest` is the default flavor (`ubuntu`).
-The same images are mirrored to Docker Hub as `oease/corral` (controller) and
-`oease/corral-runner:<flavor>`; to run a pool from the mirror, set its image override to
-`docker.io/oease/corral-runner:<flavor>` (GHCR stays the default because it does not rate-limit
-anonymous pulls).
+Runner images are published to both registries with identical tags — `ghcr.io/oeasenet/corral/runner`
+and `oease/corral-runner` on Docker Hub: `<flavor>` is the latest build of a flavor,
+`<flavor>-<runner version>` (e.g. `ubuntu-2.336.0`) pins the `actions/runner` release, and `latest` is
+the default flavor (`ubuntu`). The controller pulls from GHCR unless a pool's image override (or
+`RUNNER_IMAGE` for the first pool) names another image, e.g. `oease/corral-runner:debian`; GHCR is the
+default because it does not rate-limit anonymous pulls.
 All flavors ship the same tooling: git, git-lfs, curl, jq, zip/unzip, build-essential, clang, cmake,
 Python 3, common dev headers, sudo, and the Docker CLI with buildx and compose. Images carry the labels
 `corral.flavor` and `corral.runner-version`.
