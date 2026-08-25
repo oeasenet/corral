@@ -1,393 +1,177 @@
-# GitHub Actions Self-Hosted Runners with KMS 🚀
+# oease GitHub Actions Runners
 
-A secure, scalable infrastructure for self-hosted GitHub Actions runners with a Key Management Service (KMS) that
-eliminates PAT exposure in runner containers.
+Self-hosted GitHub Actions runners for [oease](https://github.com/oeasenet), packaged as two Docker images:
 
-[![Build and Push Docker Images](https://github.com/TuriX-AI/gha-docker-runners/actions/workflows/docker-build-push.yml/badge.svg)](https://github.com/TuriX-AI/gha-docker-runners/actions/workflows/docker-build-push.yml)
+- **`ghcr.io/oeasenet/gha-docker-runner/kms`** – a small Key Management Service that holds the GitHub PAT and hands
+  short-lived registration tokens to runners. The PAT never enters a runner container.
+- **`ghcr.io/oeasenet/gha-docker-runner/runner`** – an Ubuntu 24.04 runner with the current
+  [actions/runner](https://github.com/actions/runner), Docker CLI (buildx + compose), and common build tooling.
+  It registers itself through the KMS on start, self-updates, and deregisters cleanly on stop.
 
-## 🎯 Overview
-
-This project provides a complete solution for running self-hosted GitHub Actions runners with enhanced security through
-a dedicated Key Management Service. Instead of embedding Personal Access Tokens (PATs) directly in runner containers,
-runners request temporary registration tokens from a centralized KMS service.
-
-### Key Benefits
-
-- **🔐 Enhanced Security**: PATs never enter runner containers
-- **🎛️ Centralized Management**: Single point for PAT management
-- **📊 Monitoring & Analytics**: Built-in web dashboard for KMS monitoring
-- **🔄 Auto-registration**: Runners automatically register and deregister
-- **🐳 Docker-based**: Easy deployment with container orchestration
-- **📈 Scalable**: Support for multiple organizations and repositories
-
-## 🏗️ Architecture
+[![Build and Push Images](https://github.com/oeasenet/gha-docker-runner/actions/workflows/docker-build-push.yml/badge.svg)](https://github.com/oeasenet/gha-docker-runner/actions/workflows/docker-build-push.yml)
 
 ```mermaid
-graph TB
-    subgraph "GitHub"
-        GH[GitHub API]
+graph LR
+    subgraph host["Runner host (docker compose)"]
+        KMS["kms<br/>holds PAT_oeasenet"]
+        R1["runner ×N"]
     end
-
-    subgraph "KMS Service"
-        KMS[KMS Server<br/>Port 3000]
-        PAT[(PAT Storage)]
-        UI[Web Dashboard]
-    end
-
-    subgraph "Runner Fleet"
-        R1[Runner 1]
-        R2[Runner 2]
-        R3[Runner N]
-    end
-
-    R1 -->|Request Token| KMS
-    R2 -->|Request Token| KMS
-    R3 -->|Request Token| KMS
-    KMS -->|Generate Token| GH
-    KMS --> PAT
-    KMS --> UI
-    R1 -->|Execute Jobs| GH
-    R2 -->|Execute Jobs| GH
-    R3 -->|Execute Jobs| GH
+    R1 -- "GET /oeasenet/registration-token<br/>Authorization: Bearer KMS_AUTH_TOKEN" --> KMS
+    KMS -- "POST /orgs/oeasenet/actions/runners/registration-token<br/>Bearer PAT" --> GH["GitHub API"]
+    R1 -- "runs jobs" --> GH
 ```
 
-## 📦 Components
+## Deploy
 
-### 1. KMS Service (`/kms`)
-
-A Go-based Key Management Service that securely manages GitHub PATs and generates temporary runner tokens.
-
-**Features:**
-
-- RESTful API for token generation
-- Web dashboard for monitoring
-- Support for both organization and repository runners
-- Request statistics and health checks
-- Configurable via environment variables or JSON
-
-**Endpoints:**
-
-- `GET /` - Web dashboard UI
-- `GET /health` - Health check endpoint
-- `GET /api/stats` - Statistics API
-- `GET /api/config` - Configuration info
-- `GET /{org}/registration-token` - Organization runner token
-- `GET /{org}/remove-token` - Organization remove token
-- `GET /repo/{owner}/{repo}/registration-token` - Repository runner token
-- `GET /repo/{owner}/{repo}/remove-token` - Repository remove token
-
-### 2. Runner Service (`/runner`)
-
-Docker container for GitHub Actions self-hosted runners with automatic registration.
-
-**Features:**
-
-- Based on Ubuntu 24.04 with latest GitHub Runner
-- Automatic registration/deregistration
-- Support for custom labels
-- Additional package installation
-- Graceful shutdown handling
-
-### 3. GitHub Actions Workflows (`/.github/workflows`)
-
-Automated CI/CD pipelines for building and pushing Docker images.
-
-**Workflows:**
-
-- **docker-build-push.yml**: Builds and pushes images on changes
-- Smart change detection (only builds modified components)
-- Linux AMD64 optimized builds
-- Docker layer caching for faster builds
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose
-- GitHub Personal Access Token with appropriate permissions
-- DigitalOcean Container Registry (or modify for other registries)
-
-### 1. Configure KMS
-
-Create a `config.json` file or set environment variables:
-
-**Option A: Configuration File**
-
-```json
-{
-  "your-org": "ghp_yourPersonalAccessToken",
-  "another-org": "ghp_anotherPersonalAccessToken"
-}
-```
-
-**Option B: Environment Variables**
+Requirements on the host: Docker Engine with Compose v2, and access to GHCR (the packages are private, so
+`docker login ghcr.io` with a PAT that has `read:packages`).
 
 ```bash
-export PAT_yourorg=ghp_yourPersonalAccessToken
-export PAT_anotherorg=ghp_anotherPersonalAccessToken
+git clone https://github.com/oeasenet/gha-docker-runner.git && cd gha-docker-runner
+cp .env.example .env
+# edit .env: GITHUB_PAT, KMS_AUTH_TOKEN (openssl rand -hex 32), optionally RUNNER_REPLICAS / RUNNER_LABELS
+docker compose up -d          # or: make up
 ```
 
-### 2. Deploy KMS Service
+The runners appear under **Organization → Settings → Actions → Runners** within a minute, named
+`oease-<container id>`, with labels `self-hosted`, `Linux`, `X64`/`ARM64` plus anything in `RUNNER_LABELS`.
+Target them from workflows with `runs-on: self-hosted` (or `runs-on: [self-hosted, <label>]`).
+
+| Operation                 | Command                                                       |
+|---------------------------|---------------------------------------------------------------|
+| Status / logs             | `make ps` · `make logs`                                       |
+| Scale                     | set `RUNNER_REPLICAS` in `.env`, then `docker compose up -d`  |
+| Update to latest images   | `make update` (`docker compose pull && docker compose up -d`) |
+| Stop                      | `make down` – runners finish their current job, then deregister |
+| KMS dashboard             | http://127.0.0.1:3000 on the host (stats, configured owners, health) |
+
+Stopping a runner waits up to `RUNNER_GRACEFUL_STOP_TIMEOUT` (15 min) for an in-flight job, then removes the
+registration from GitHub, so the runner list stays clean. The compose `stop_grace_period` is set accordingly.
+
+### The PAT
+
+`GITHUB_PAT` must be allowed to manage self-hosted runners for `GITHUB_OWNER`:
+
+- classic token: `admin:org` for organization runners, `repo` for repository runners
+- fine-grained token: organization permission **Self-hosted runners: Read and write**
+
+Rotate it by editing `.env` and running `docker compose up -d kms`. Several owners can be served by one KMS: add
+`PAT_<owner>` variables to the `kms` service (or mount a JSON file `{"owner": "pat"}` at `/app/config.json`).
+
+## Configuration
+
+### KMS (`kms` service)
+
+| Variable         | Description                                                                              | Default            |
+|------------------|------------------------------------------------------------------------------------------|--------------------|
+| `PAT_<owner>`    | PAT used to mint tokens for `<owner>` (org or user). Repeat per owner.                   | –                  |
+| `KMS_AUTH_TOKEN` | Shared secret; token endpoints require `Authorization: Bearer <token>` when set.         | unset (warns)      |
+| `CONFIG_FILE`    | Optional JSON file with `{"owner": "pat"}` entries; environment variables override it.   | `/app/config.json` |
+| `GITHUB_API_URL` | GitHub REST API base (GitHub Enterprise Server: `https://ghe.example.com/api/v3`).       | `https://api.github.com` |
+| `PORT`           | Listen port.                                                                             | `3000`             |
+
+Endpoints: `GET /{org}/registration-token`, `GET /{org}/remove-token`, `GET /repo/{owner}/{repo}/registration-token`,
+`GET /repo/{owner}/{repo}/remove-token` (all require the bearer token when `KMS_AUTH_TOKEN` is set), plus the
+unauthenticated `GET /` dashboard, `GET /health`, `GET /api/stats` and `GET /api/config` (never exposes secrets).
+Only owners with a configured PAT are served; anything else is `404`, GitHub failures surface as `502`.
+
+### Runner (`runner` service)
+
+| Variable                       | Description                                                                          | Default            |
+|--------------------------------|--------------------------------------------------------------------------------------|--------------------|
+| `KMS_SERVER_ADDR`              | KMS base URL. **Required.**                                                          | –                  |
+| `RUNNER_REGISTER_TO`           | `org` for organization runners or `owner/repo` for repository runners. **Required.** | –                  |
+| `KMS_AUTH_TOKEN`               | Must match the KMS.                                                                  | –                  |
+| `RUNNER_NAME_PREFIX`           | Runner name becomes `<prefix>-<hostname>` (unique per container).                    | –                  |
+| `RUNNER_NAME`                  | Explicit runner name (only with a single replica).                                   | hostname           |
+| `RUNNER_LABELS`                | Extra labels, comma-separated.                                                       | –                  |
+| `RUNNER_GROUP`                 | Runner group (organization runners).                                                 | Default            |
+| `RUNNER_WORKDIR`               | Job work directory (`--work`).                                                       | `_work`            |
+| `RUNNER_EPHEMERAL`             | `true` = one job per registration, then the container restarts clean.               | `false`            |
+| `RUNNER_DISABLE_UPDATE`        | `true` = never self-update the runner binary (rely on image updates).               | `false`            |
+| `RUNNER_GRACEFUL_STOP_TIMEOUT` | Seconds to wait for a running job on stop.                                           | `900`              |
+| `ADDITIONAL_PACKAGES`          | apt packages installed on start, comma-separated.                                    | –                  |
+| `ADDITIONAL_FLAGS`             | Extra `config.sh` flags, e.g. `--no-default-labels`.                                 | –                  |
+| `GITHUB_URL`                   | GitHub base URL (GitHub Enterprise Server).                                          | `https://github.com` |
+| `KMS_RETRY_INTERVAL` / `KMS_MAX_ATTEMPTS` | Retry pacing while the KMS is unavailable.                                | `5` / `60`         |
+
+**Docker in jobs.** The compose file mounts `/var/run/docker.sock`, so `docker build`, `docker run` and
+`docker compose` work inside jobs through the host daemon. This is root-equivalent on the host: only run trusted
+workflows on these runners, or remove the mount. Bind mounts inside jobs (`docker run -v $PWD:/x`) resolve on the
+host, so they only work if the work directory is bind-mounted at the same path in the container
+(`RUNNER_WORKDIR=/srv/gha/_work` + `- /srv/gha/_work:/srv/gha/_work`), one replica per path.
+
+**Runner updates.** GitHub stops scheduling jobs on runners that are too far behind the current release. By default
+the runners self-update in place, and CI rebuilds both images weekly with the latest `actions/runner` release, so
+`make update` also moves the fleet forward. Ephemeral runners start from the image every time – pair
+`RUNNER_EPHEMERAL=true` with `RUNNER_DISABLE_UPDATE=true` and keep the image current.
+
+## Images and CI
+
+`.github/workflows/docker-build-push.yml` builds and pushes both images to GHCR for `linux/amd64` and
+`linux/arm64`, signed with [cosign](https://github.com/sigstore/cosign) (keyless, via the workflow's OIDC identity).
+No secrets to configure: it authenticates with the workflow's `GITHUB_TOKEN`.
+
+| Trigger                    | What happens                                                                      |
+|----------------------------|-----------------------------------------------------------------------------------|
+| push to `main`             | tests, then builds only the images whose sources changed → `latest`, `main`, `sha-<commit>` |
+| tag `vX.Y.Z`               | builds both → `X.Y.Z`, `X.Y`                                                      |
+| pull request               | tests + `linux/amd64` build, nothing pushed                                       |
+| weekly (Mon 06:00 UTC) / manual | builds both with fresh base images and the latest `actions/runner` release; the runner image also gets a `runner-<version>` tag |
+
+Dependabot keeps the base images, actions and Go modules current; merging its PRs republishes the images.
+
+Verify a signature:
 
 ```bash
-# Using Docker
-docker run -d \
-  -p 3000:3000 \
-  -e PAT_myorg=ghp_token \
-  -v $(pwd)/config.json:/root/config.json \
-  registry.digitalocean.com/turix/gha-runner-kms:latest
-
-# Or using Docker Compose
-docker-compose up -d kms
+cosign verify ghcr.io/oeasenet/gha-docker-runner/runner:latest \
+  --certificate-identity-regexp 'https://github.com/oeasenet/gha-docker-runner/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-### 3. Deploy Runners
+## Development
 
 ```bash
-docker run -d \
-  -e KMS_SERVER_ADDR=http://kms-service:3000 \
-  -e RUNNER_REGISTER_TO=your-org \
-  -e RUNNER_LABELS=docker,ubuntu-24.04 \
-  registry.digitalocean.com/turix/gha-runner:latest
+make test            # Go unit tests (KMS) + hermetic bash tests (runner entrypoint)
+make build           # build both images for the local platform
+make build-runner RUNNER_VERSION=2.337.0
+make push TAG=dev    # multi-arch build + push (make login first; needs write:packages)
+make runner-version  # latest actions/runner release
 ```
 
-## 📋 Configuration
+Layout:
 
-### KMS Configuration
-
-| Environment Variable | Description                     | Default |
-|----------------------|---------------------------------|---------|
-| `PORT`               | Server port                     | `3000`  |
-| `PAT_*`              | GitHub PATs (e.g., `PAT_myorg`) | -       |
-
-### Runner Configuration
-
-| Environment Variable  | Description               | Example                   |
-|-----------------------|---------------------------|---------------------------|
-| `KMS_SERVER_ADDR`     | KMS service URL           | `http://kms:3000`         |
-| `RUNNER_REGISTER_TO`  | GitHub org or repo        | `myorg` or `myorg/myrepo` |
-| `RUNNER_NAME`         | Custom runner name        | `runner-1`                |
-| `RUNNER_LABELS`       | Runner labels             | `docker,self-hosted`      |
-| `RUNNER_WORKDIR`      | Working directory         | `_work`                   |
-| `ADDITIONAL_PACKAGES` | Extra packages to install | `docker.io,kubectl`       |
-| `ADDITIONAL_FLAGS`    | Extra config flags        | `--ephemeral`             |
-
-## 🐳 Docker Compose Example
-
-```yaml
-version: '3.8'
-
-services:
-    kms:
-        image: registry.digitalocean.com/turix/gha-runner-kms:latest
-        ports:
-            - "3000:3000"
-        environment:
-            - PAT_myorg=${GITHUB_PAT}
-        volumes:
-            - ./config.json:/root/config.json
-        restart: unless-stopped
-
-    runner:
-        image: registry.digitalocean.com/turix/gha-runner:latest
-        environment:
-            - KMS_SERVER_ADDR=http://kms:3000
-            - RUNNER_REGISTER_TO=myorg
-            - RUNNER_LABELS=docker,self-hosted
-        depends_on:
-            - kms
-        restart: unless-stopped
-        deploy:
-            replicas: 3  # Scale to 3 runners
+```
+kms/        Go service (stdlib only) + dashboard template + tests
+runner/     Dockerfile, entrypoint.sh, test/entrypoint_test.sh
+docker-compose.yml, .env.example     deployment
+.github/workflows/docker-build-push.yml, .github/dependabot.yml
 ```
 
-## 🔧 Building from Source
+## Security notes
 
-### Build KMS
+- Keep the KMS on the internal compose network; it is only published on `127.0.0.1` by default. Anyone who can
+  reach its token endpoints with the bearer token can register runners for the organization.
+- Always set `KMS_AUTH_TOKEN` in production. Without it the KMS serves tokens to any client that can reach it and
+  logs a warning at start.
+- Use the narrowest PAT that can manage runners, and rotate it periodically.
+- Runners execute workflow code as root inside their container, with access to the host's Docker daemon when the
+  socket is mounted. Treat the runner host as part of your CI trust boundary.
 
-```bash
-cd kms
-go build -o kms-server
-# Or using Docker
-docker build -t gha-runner-kms .
-```
+## Troubleshooting
 
-### Build Runner
+| Symptom                                               | Check                                                                          |
+|-------------------------------------------------------|--------------------------------------------------------------------------------|
+| runner logs `KMS unavailable … retrying`              | `docker compose logs kms`; `KMS_AUTH_TOKEN` mismatch shows as `error: 401`     |
+| KMS answers `502 github api returned 401/403/404`     | PAT expired, wrong scopes, or the org name in `GITHUB_OWNER` does not match     |
+| KMS answers `404 no PAT configured for "…"`           | `RUNNER_REGISTER_TO` owner has no `PAT_<owner>` on the KMS                     |
+| `config.sh` fails with `NotFound` from GitHub         | the token was rejected by GitHub (usually a PAT without runner permissions)     |
+| runner shows offline on GitHub after a restart        | it re-registers with `--replace`; stale entries disappear once a runner with the same name is back or after GitHub's cleanup |
+| jobs cannot mount volumes into containers             | see *Docker in jobs* above                                                     |
 
-```bash
-cd runner
-docker build -t gha-runner .
-```
+## License
 
-## 🌐 Web Dashboard
+Apache License 2.0 – see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Access the KMS dashboard at `http://localhost:3000` to monitor:
-
-- 📊 Request statistics
-- ✅ Success/failure rates
-- 🏢 Configured organizations
-- 📈 Real-time metrics
-- 🔍 API endpoint documentation
-
-## 🔒 Security Considerations
-
-1. **Never commit PATs** to version control
-2. **Use secrets management** for production deployments
-3. **Limit PAT scopes** to minimum required permissions:
-    - `repo` (for repository runners)
-    - `admin:org` (for organization runners)
-4. **Network isolation** - Keep KMS service in internal network
-5. **TLS/HTTPS** - Use HTTPS in production environments
-6. **Regular rotation** - Rotate PATs periodically
-
-## 📊 Monitoring & Observability
-
-### Health Check
-
-```bash
-curl http://localhost:3000/health
-```
-
-### Statistics API
-
-```bash
-curl http://localhost:3000/api/stats | jq
-```
-
-## 🚢 Deployment Options
-
-### Kubernetes
-
-Deploy using Helm or kubectl:
-
-```bash
-kubectl apply -f k8s/
-```
-
-### Docker Swarm
-
-```bash
-docker stack deploy -c docker-stack.yml github-runners
-```
-
-### DigitalOcean App Platform
-
-Deploy directly to DigitalOcean App Platform using the provided app spec.
-
-## 🔄 CI/CD Pipeline
-
-The project includes GitHub Actions workflows for:
-
-- **Automatic builds** on push to main branch
-- **Optimized AMD64 images**
-- **Smart change detection** (only builds changed components)
-- **Docker layer caching** for faster builds
-- **Automatic tagging** with branch and SHA
-
-### Required GitHub Secrets
-
-| Secret          | Description                    |
-|-----------------|--------------------------------|
-| `DOCR_USERNAME` | DigitalOcean registry username |
-| `DOCR_PASSWORD` | DigitalOcean registry password |
-
-## 📝 API Documentation
-
-### Registration Token
-
-```bash
-# Organization runner
-GET /{org}/registration-token
-
-# Repository runner
-GET /repo/{owner}/{repo}/registration-token
-
-Response: Plain text token
-```
-
-### Remove Token
-
-```bash
-# Organization runner
-GET /{org}/remove-token
-
-# Repository runner
-GET /repo/{owner}/{repo}/remove-token
-
-Response: Plain text token
-```
-
-### Statistics
-
-```bash
-GET /api/stats
-
-Response:
-{
-  "total_requests": 150,
-  "successful_requests": 145,
-  "failed_requests": 5,
-  "requests_by_org": {...},
-  "requests_by_repo": {...}
-}
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the GPL License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Inspired by [knatnetwork/github-runner](https://github.com/knatnetwork/github-runner)
-- GitHub Actions Runner team for the self-hosted runner
-- The Go community for excellent libraries
-
-## 📚 Resources
-
-- [GitHub Actions Self-Hosted Runners Documentation](https://docs.github.com/en/actions/hosting-your-own-runners)
-- [GitHub REST API Documentation](https://docs.github.com/en/rest)
-- [DigitalOcean Container Registry](https://docs.digitalocean.com/products/container-registry/)
-
-## 🐛 Troubleshooting
-
-### KMS Service Issues
-
-**Problem**: KMS service won't start
-
-- Check if port 3000 is available
-- Verify PAT configuration
-- Check logs: `docker logs <container-id>`
-
-**Problem**: Authentication failures
-
-- Verify PAT has correct permissions
-- Check PAT hasn't expired
-- Ensure organization name matches exactly
-
-### Runner Issues
-
-**Problem**: Runner won't register
-
-- Verify KMS service is accessible
-- Check network connectivity between runner and KMS
-- Verify organization/repository name is correct
-
-**Problem**: Runner exits immediately
-
-- Check KMS_SERVER_ADDR is set correctly
-- Verify runner can reach GitHub API
-- Check runner logs for specific errors
-
----
-
-Made with ❤️ for the GitHub Actions community by [FantasticTony](https://ftan.dev)
+Originally created by [FantasticTony](https://ftan.dev); now developed and maintained as part of oease.
+Runner container design inspired by [knatnetwork/github-runner](https://github.com/knatnetwork/github-runner).
