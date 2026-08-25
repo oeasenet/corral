@@ -112,3 +112,13 @@ Temporary Items
 /.idea/modules.xml
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/vcs.xml
+
+### Project
+# Secrets and local configuration — never commit these
+kms/config.json
+.env
+*.env.local
+
+# Local build artifacts
+kms/kms-server
+kms/kms
