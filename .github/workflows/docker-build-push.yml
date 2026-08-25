@@ -3,9 +3,11 @@ name: Build and Push Images
 # Builds the controller (ghcr.io/<owner>/corral) and every runner flavor found in
 # images/*/flavor.json (ghcr.io/<owner>/corral/runner:<flavor>) for linux/amd64 and
 # linux/arm64. Adding a flavor directory is enough; nothing here needs editing.
-# With the secrets DOCKERHUB_USERNAME + DOCKERHUB_TOKEN (and optionally the variable
-# DOCKERHUB_NAMESPACE) the same images are also pushed to Docker Hub as
-# <namespace>/corral and <namespace>/corral-runner:<flavor>.
+# With the variables DOCKERHUB_NAMESPACE + DOCKERHUB_USERNAME and the secret
+# DOCKERHUB_TOKEN, the same images are also pushed to Docker Hub as
+# <namespace>/corral and <namespace>/corral-runner:<flavor>. (The username is a
+# variable, not a secret: GitHub masks secret values everywhere, including inside
+# image names, and drops job outputs that contain them.)
 #   push to main      -> controller + every runner flavor
 #   tag vX.Y.Z        -> same, with version tags
 #   every 6 hours     -> runner flavors, only when the latest actions/runner release has no image yet
@@ -61,8 +63,10 @@ jobs:
                     EVENT: ${{ github.event_name }}
                     SCHEDULE: ${{ github.event.schedule }}
                     OWNER: ${{ github.repository_owner }}
-                    HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}
-                    DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+                    # Only the token is read here: the plan job's outputs must not touch any
+                    # secret whose value could appear in an image name.
+                    HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' && vars.DOCKERHUB_NAMESPACE != '' }}
+                    DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
                 run: |
                     if [ -n "$REQUESTED" ]; then
                         version="${REQUESTED#v}"
@@ -112,7 +116,7 @@ jobs:
         if: needs.plan.outputs.build == 'true'
         runs-on: ubuntu-latest
         env:
-            HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}
+            HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' && vars.DOCKERHUB_NAMESPACE != '' }}
         strategy:
             fail-fast: false
             matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -132,7 +136,7 @@ jobs:
                 if: env.HAS_DOCKERHUB == 'true'
                 uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
                 with:
-                    username: ${{ secrets.DOCKERHUB_USERNAME }}
+                    username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
                     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
             -   name: Image metadata

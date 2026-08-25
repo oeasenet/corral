@@ -208,11 +208,12 @@ arm64, always with the latest `actions/runner` release:
 - Mondays: the runner flavors, always (fresh base image digests, OS patches).
 
 It authenticates with the workflow's `GITHUB_TOKEN`; nothing to configure when you fork it — images land
-under your own `ghcr.io/<owner>/corral`. To mirror to Docker Hub as well, add the repository secrets
-`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with read & write scope) and, if the images
-should live under an organization, the repository variable `DOCKERHUB_NAMESPACE`; the workflow then also
-pushes `<namespace>/corral` and `<namespace>/corral-runner:<flavor>`. Dependabot keeps the actions and
-base images current.
+under your own `ghcr.io/<owner>/corral`. To mirror to Docker Hub as well, add the repository variables
+`DOCKERHUB_NAMESPACE` (user or organization the images go to) and `DOCKERHUB_USERNAME`, plus the secret
+`DOCKERHUB_TOKEN` (an access token with read & write scope); the workflow then also pushes
+`<namespace>/corral` and `<namespace>/corral-runner:<flavor>`. Keep the username a variable, not a
+secret: GitHub masks secret values everywhere they appear, image names included. Dependabot keeps the
+actions and base images current.
 
 ## Security notes
 
