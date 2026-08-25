@@ -105,3 +105,10 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+/.idea/.gitignore
+/.idea/encodings.xml
+/.idea/gha-docker-runners.iml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/vcs.xml
