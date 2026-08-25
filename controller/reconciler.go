@@ -819,13 +819,21 @@ func (r *Reconciler) Snapshot(ctx context.Context) (State, error) {
 	return st, nil
 }
 
-// shortDuration renders a duration without trailing zero units: 1h, 15m, 1h30m.
+// shortDuration renders a duration without zero units: 1h, 15m, 1h30m, 1m30s.
 func shortDuration(d time.Duration) string {
-	out := d.String()
-	for _, zero := range []string{"0s", "0m"} {
-		if len(out) > len(zero) && strings.HasSuffix(out, zero) {
-			out = strings.TrimSuffix(out, zero)
-		}
+	if d <= 0 {
+		return "0s"
 	}
-	return out
+	h, m, sec := int(d/time.Hour), int(d%time.Hour/time.Minute), int(d%time.Minute/time.Second)
+	var b strings.Builder
+	if h > 0 {
+		fmt.Fprintf(&b, "%dh", h)
+	}
+	if m > 0 {
+		fmt.Fprintf(&b, "%dm", m)
+	}
+	if sec > 0 || b.Len() == 0 {
+		fmt.Fprintf(&b, "%ds", sec)
+	}
+	return b.String()
 }
