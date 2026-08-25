@@ -1,0 +1,65 @@
+# oease GitHub Actions self-hosted runners
+#
+#   cp .env.example .env      # fill in GITHUB_OWNER, GITHUB_PAT, KMS_AUTH_TOKEN
+#   docker compose up -d
+#
+# Scale with RUNNER_REPLICAS in .env. Update with: docker compose pull && docker compose up -d
+
+services:
+    kms:
+        image: ghcr.io/oeasenet/gha-docker-runner/kms:${IMAGE_TAG:-latest}
+        restart: unless-stopped
+        environment:
+            - TZ=${TZ:-UTC}
+            - PAT_${GITHUB_OWNER:?set GITHUB_OWNER in .env}=${GITHUB_PAT:?set GITHUB_PAT in .env}
+            - KMS_AUTH_TOKEN=${KMS_AUTH_TOKEN:?set KMS_AUTH_TOKEN in .env (openssl rand -hex 32)}
+        ports:
+            # Dashboard + API, bound to localhost only by default.
+            # Set KMS_BIND_ADDR=0.0.0.0 (or front it with Traefik) to expose it.
+            - "${KMS_BIND_ADDR:-127.0.0.1}:${KMS_PORT:-3000}:3000"
+        healthcheck:
+            test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:3000/health" ]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 5s
+        labels:
+            - com.centurylinklabs.watchtower.enable=true
+        networks:
+            - runners
+
+    runner:
+        image: ghcr.io/oeasenet/gha-docker-runner/runner:${IMAGE_TAG:-latest}
+        restart: unless-stopped
+        deploy:
+            replicas: ${RUNNER_REPLICAS:-2}
+        depends_on:
+            kms:
+                condition: service_healthy
+        environment:
+            - TZ=${TZ:-UTC}
+            - KMS_SERVER_ADDR=http://kms:3000
+            - KMS_AUTH_TOKEN=${KMS_AUTH_TOKEN}
+            - RUNNER_REGISTER_TO=${RUNNER_REGISTER_TO:-${GITHUB_OWNER}}
+            - RUNNER_NAME_PREFIX=${RUNNER_NAME_PREFIX:-oease}
+            - RUNNER_LABELS=${RUNNER_LABELS:-}
+            - RUNNER_GROUP=${RUNNER_GROUP:-}
+            - RUNNER_EPHEMERAL=${RUNNER_EPHEMERAL:-false}
+            - RUNNER_DISABLE_UPDATE=${RUNNER_DISABLE_UPDATE:-false}
+            - RUNNER_GRACEFUL_STOP_TIMEOUT=${RUNNER_GRACEFUL_STOP_TIMEOUT:-900}
+            - ADDITIONAL_PACKAGES=${ADDITIONAL_PACKAGES:-}
+        volumes:
+            # Lets jobs run `docker build` / `docker run` through the host daemon.
+            # Remove if workflows never need Docker (it is root-equivalent on the host).
+            - /var/run/docker.sock:/var/run/docker.sock
+        # A stopping runner finishes its current job first (RUNNER_GRACEFUL_STOP_TIMEOUT);
+        # the grace period must be longer than that.
+        stop_grace_period: 16m
+        labels:
+            # Never let Watchtower restart runners mid-job; roll them with `make update`.
+            - com.centurylinklabs.watchtower.enable=false
+        networks:
+            - runners
+
+networks:
+    runners:

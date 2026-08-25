@@ -1,102 +1,230 @@
-name: Build and Push Docker Images
+name: Build and Push Images
+
+# Builds ghcr.io/oeasenet/gha-docker-runner/{kms,runner} for linux/amd64 and
+# linux/arm64, signs them with cosign and pushes them to GHCR.
+#
+#   push to main      -> builds only the images whose sources changed
+#   tag v*.*.*        -> builds both, tagged with the semver
+#   pull request      -> tests + amd64 build without pushing
+#   weekly / manual   -> builds both with the latest actions/runner release and
+#                        fresh base images, so production can always pull "latest"
 
 on:
     push:
-        branches:
-            - main
-        paths:
-            - 'kms/**'
-            - 'runner/**'
-            - '.github/workflows/docker-build-push.yml'
+        branches: [ main ]
+        tags: [ 'v*.*.*' ]
+    pull_request:
+        branches: [ main ]
+    schedule:
+        - cron: '0 6 * * 1'
+    workflow_dispatch:
+        inputs:
+            runner_version:
+                description: 'actions/runner version to build (blank = latest release)'
+                required: false
+                default: ''
 
 env:
-    REGISTRY: registry.digitalocean.com
+    REGISTRY: ghcr.io
+    IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
 
 jobs:
-    build-kms:
-        runs-on: self-hosted
+    changes:
+        name: Detect changes
+        # Only branch pushes and PRs are filtered; tags, schedules and manual
+        # runs always build everything.
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
+        runs-on: ubuntu-latest
+        outputs:
+            kms: ${{ steps.filter.outputs.kms }}
+            runner: ${{ steps.filter.outputs.runner }}
         steps:
-            -   name: Checkout code
-                uses: actions/checkout@v4
+            -   uses: actions/checkout@v7
+            -   uses: dorny/paths-filter@v4
+                id: filter
+                with:
+                    filters: |
+                        kms:
+                            - 'kms/**'
+                            - '.github/workflows/docker-build-push.yml'
+                        runner:
+                            - 'runner/**'
+                            - '.github/workflows/docker-build-push.yml'
 
-            -   name: Set up Docker Buildx
-                uses: docker/setup-buildx-action@v3
+    test:
+        name: Test
+        runs-on: ubuntu-latest
+        steps:
+            -   uses: actions/checkout@v7
+            -   uses: actions/setup-go@v7
+                with:
+                    go-version-file: kms/go.mod
+                    cache-dependency-path: kms/go.sum
+            -   name: KMS unit tests
+                working-directory: kms
+                run: |
+                    test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt: files need formatting" >&2; exit 1; }
+                    go vet ./...
+                    go test -race ./...
+            -   name: Runner entrypoint tests
+                run: bash runner/test/entrypoint_test.sh
 
-            -   name: Log in to the Container registry
-                uses: docker/login-action@v3
+    kms:
+        name: KMS image
+        needs: [ changes, test ]
+        if: ${{ !cancelled() && needs.test.result == 'success' && (needs.changes.result == 'skipped' || needs.changes.outputs.kms == 'true') }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+            id-token: write
+        steps:
+            -   uses: actions/checkout@v7
+
+            -   uses: docker/setup-qemu-action@v4
+            -   uses: docker/setup-buildx-action@v4
+
+            -   name: Log in to ${{ env.REGISTRY }}
+                if: github.event_name != 'pull_request'
+                uses: docker/login-action@v4
                 with:
                     registry: ${{ env.REGISTRY }}
-                    username: ${{ secrets.DOCR_USERNAME }}
-                    password: ${{ secrets.DOCR_PASSWORD }}
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
 
-            -   name: Extract metadata
+            -   name: Image metadata
                 id: meta
-                uses: docker/metadata-action@v5
+                uses: docker/metadata-action@v6
+                env:
+                    DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
                 with:
-                    images: ${{ env.REGISTRY }}/turix/gha-runner-kms
+                    images: ${{ env.IMAGE_BASE }}/kms
                     tags: |
                         type=ref,event=branch
                         type=ref,event=pr
                         type=semver,pattern={{version}}
                         type=semver,pattern={{major}}.{{minor}}
-                        type=sha,prefix={{branch}}-
+                        type=sha,prefix=sha-
                         type=raw,value=latest,enable={{is_default_branch}}
+                    labels: |
+                        org.opencontainers.image.title=oease GitHub Runner KMS
+                        org.opencontainers.image.licenses=Apache-2.0
 
-            -   name: Build and push KMS Docker image
-                uses: docker/build-push-action@v5
+            -   name: Build and push
+                id: build
+                uses: docker/build-push-action@v7
                 with:
-                    context: ./kms
-                    file: ./kms/Dockerfile
-                    platforms: linux/amd64
-                    push: true
+                    context: kms
+                    platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+                    push: ${{ github.event_name != 'pull_request' }}
                     tags: ${{ steps.meta.outputs.tags }}
                     labels: ${{ steps.meta.outputs.labels }}
-                    cache-from: type=registry,ref=${{ env.REGISTRY }}/turix/gha-runner-kms:buildcache
-                    cache-to: type=registry,ref=${{ env.REGISTRY }}/turix/gha-runner-kms:buildcache,mode=max
+                    annotations: ${{ steps.meta.outputs.annotations }}
                     build-args: |
-                        VERSION=${{ github.sha }}
-                        BUILD_DATE=${{ github.event.head_commit.timestamp }}
+                        VERSION=${{ steps.meta.outputs.version }}
+                    cache-from: type=gha,scope=kms
+                    cache-to: type=gha,scope=kms,mode=max
+                    provenance: false
+                    sbom: false
 
-    build-runner:
-        runs-on: self-hosted
+            -   name: Install cosign
+                if: github.event_name != 'pull_request'
+                uses: sigstore/cosign-installer@v4
+
+            -   name: Sign the published image
+                if: github.event_name != 'pull_request'
+                env:
+                    TAGS: ${{ steps.meta.outputs.tags }}
+                    DIGEST: ${{ steps.build.outputs.digest }}
+                run: echo "$TAGS" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
+
+    runner:
+        name: Runner image
+        needs: [ changes, test ]
+        if: ${{ !cancelled() && needs.test.result == 'success' && (needs.changes.result == 'skipped' || needs.changes.outputs.runner == 'true') }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+            id-token: write
         steps:
-            -   name: Checkout code
-                uses: actions/checkout@v4
+            -   uses: actions/checkout@v7
 
-            -   name: Set up Docker Buildx
-                uses: docker/setup-buildx-action@v3
+            -   name: Resolve actions/runner version
+                id: runner
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    REQUESTED: ${{ inputs.runner_version }}
+                run: |
+                    if [ -n "$REQUESTED" ]; then
+                        version="${REQUESTED#v}"
+                    else
+                        version=$(gh api repos/actions/runner/releases/latest --jq '.tag_name' | sed 's/^v//')
+                    fi
+                    echo "Building actions/runner v${version}"
+                    echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-            -   name: Log in to the Container registry
-                uses: docker/login-action@v3
+            -   uses: docker/setup-qemu-action@v4
+            -   uses: docker/setup-buildx-action@v4
+
+            -   name: Log in to ${{ env.REGISTRY }}
+                if: github.event_name != 'pull_request'
+                uses: docker/login-action@v4
                 with:
                     registry: ${{ env.REGISTRY }}
-                    username: ${{ secrets.DOCR_USERNAME }}
-                    password: ${{ secrets.DOCR_PASSWORD }}
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
 
-            -   name: Extract metadata
+            -   name: Image metadata
                 id: meta
-                uses: docker/metadata-action@v5
+                uses: docker/metadata-action@v6
+                env:
+                    DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
                 with:
-                    images: ${{ env.REGISTRY }}/turix/gha-runner
+                    images: ${{ env.IMAGE_BASE }}/runner
                     tags: |
                         type=ref,event=branch
                         type=ref,event=pr
                         type=semver,pattern={{version}}
                         type=semver,pattern={{major}}.{{minor}}
-                        type=sha,prefix={{branch}}-
+                        type=sha,prefix=sha-
+                        type=raw,value=runner-${{ steps.runner.outputs.version }},enable={{is_default_branch}}
                         type=raw,value=latest,enable={{is_default_branch}}
+                    labels: |
+                        org.opencontainers.image.title=oease GitHub Actions runner
+                        org.opencontainers.image.licenses=Apache-2.0
 
-            -   name: Build and push Runner Docker image
-                uses: docker/build-push-action@v5
+            -   name: Build and push
+                id: build
+                uses: docker/build-push-action@v7
                 with:
-                    context: ./runner
-                    file: ./runner/Dockerfile
-                    platforms: linux/amd64
-                    push: true
+                    context: runner
+                    platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+                    push: ${{ github.event_name != 'pull_request' }}
                     tags: ${{ steps.meta.outputs.tags }}
                     labels: ${{ steps.meta.outputs.labels }}
-                    cache-from: type=registry,ref=${{ env.REGISTRY }}/turix/gha-runner:buildcache
-                    cache-to: type=registry,ref=${{ env.REGISTRY }}/turix/gha-runner:buildcache,mode=max
+                    annotations: ${{ steps.meta.outputs.annotations }}
                     build-args: |
-                        VERSION=${{ github.sha }}
-                        BUILD_DATE=${{ github.event.head_commit.timestamp }}
+                        GITHUB_RUNNER_VERSION=${{ steps.runner.outputs.version }}
+                    cache-from: type=gha,scope=runner
+                    cache-to: type=gha,scope=runner,mode=max
+                    provenance: false
+                    sbom: false
+
+            -   name: Install cosign
+                if: github.event_name != 'pull_request'
+                uses: sigstore/cosign-installer@v4
+
+            -   name: Sign the published image
+                if: github.event_name != 'pull_request'
+                env:
+                    TAGS: ${{ steps.meta.outputs.tags }}
+                    DIGEST: ${{ steps.build.outputs.digest }}
+                run: echo "$TAGS" | xargs -I {} cosign sign --yes "{}@${DIGEST}"

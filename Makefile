@@ -1,203 +1,69 @@
-# GitHub Actions Docker Runners Makefile
-# Build and push Docker images for KMS and Runner services
+# oease GitHub Actions runners: build, test and deploy helpers.
+# Images are normally built and pushed by CI (.github/workflows/docker-build-push.yml);
+# the build/push targets are for local development and emergencies.
 
-# Configuration
-REGISTRY ?= registry.digitalocean.com
-NAMESPACE ?= turix
-PROJECT_NAME = gha-docker-runners
+REGISTRY       ?= ghcr.io
+NAMESPACE      ?= oeasenet/gha-docker-runner
+TAG            ?= latest
+PLATFORMS      ?= linux/amd64,linux/arm64
+VERSION        ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+RUNNER_VERSION ?= $(shell sed -n 's/^ARG GITHUB_RUNNER_VERSION=//p' runner/Dockerfile | head -n1)
 
-# Image names
-KMS_IMAGE = $(REGISTRY)/$(NAMESPACE)/gha-runner-kms
-RUNNER_IMAGE = $(REGISTRY)/$(NAMESPACE)/gha-runner
+KMS_IMAGE    = $(REGISTRY)/$(NAMESPACE)/kms
+RUNNER_IMAGE = $(REGISTRY)/$(NAMESPACE)/runner
 
-# Tags
-TAG ?= latest
-COMMIT_SHA = $(shell git rev-parse --short HEAD)
-BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
+.DEFAULT_GOAL := help
+.PHONY: help build build-kms build-runner test test-kms test-runner push login up down logs ps update runner-version
 
-# Build arguments
-BUILD_DATE = $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
-VERSION = $(shell git describe --tags --always --dirty)
+help: ## Show this help
+	@echo "oease GitHub Actions runners"
+	@echo
+	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@echo
+	@echo "Variables: TAG=$(TAG)  RUNNER_VERSION=$(RUNNER_VERSION)  PLATFORMS=$(PLATFORMS)"
 
-# Docker build options
-DOCKER_BUILDKIT = 1
-PLATFORM = linux/amd64
+## --- deploy (on the runner host) --------------------------------------------
 
-.PHONY: help build build-kms build-runner push push-kms push-runner tag clean test info
+up: ## Start the KMS and runners (needs .env, see .env.example)
+	docker compose up -d
 
-## Default target
-all: build
+down: ## Stop everything; runners finish their current job and deregister first
+	docker compose down
 
-## Show help
-help:
-	@echo "GitHub Actions Docker Runners - Build System"
-	@echo ""
-	@echo "Available targets:"
-	@echo "  build          - Build both KMS and Runner images"
-	@echo "  build-kms      - Build only KMS image"
-	@echo "  build-runner   - Build only Runner image"
-	@echo "  push           - Push both images to registry"
-	@echo "  push-kms       - Push only KMS image"
-	@echo "  push-runner    - Push only Runner image"
-	@echo "  tag            - Tag images with additional tags"
-	@echo "  clean          - Remove local images"
-	@echo "  test           - Test built images locally"
-	@echo "  info           - Show build information"
-	@echo ""
-	@echo "Variables:"
-	@echo "  REGISTRY       - Container registry (default: $(REGISTRY))"
-	@echo "  NAMESPACE      - Registry namespace (default: $(NAMESPACE))"
-	@echo "  TAG            - Image tag (default: $(TAG))"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make build                    # Build both images"
-	@echo "  make build-kms TAG=v1.0.0     # Build KMS with specific tag"
-	@echo "  make push                     # Push both images"
-	@echo "  make TAG=develop push-kms     # Build and push KMS with develop tag"
+update: ## Pull the latest images and roll the stack
+	docker compose pull
+	docker compose up -d
 
-## Build both images
-build: build-kms build-runner
+ps: ## Show stack status
+	docker compose ps
 
-## Build KMS image
-build-kms:
-	@echo "🔨 Building KMS image..."
-	@echo "Image: $(KMS_IMAGE):$(TAG)"
-	@cd kms && \
-	DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker build \
-		--platform $(PLATFORM) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
-		--build-arg COMMIT_SHA=$(COMMIT_SHA) \
-		-t $(KMS_IMAGE):$(TAG) \
-		-t $(KMS_IMAGE):$(COMMIT_SHA) \
-		.
-	@echo "✅ KMS image built successfully"
+logs: ## Tail logs
+	docker compose logs -f --tail=100
 
-## Build Runner image
-build-runner:
-	@echo "🔨 Building Runner image..."
-	@echo "Image: $(RUNNER_IMAGE):$(TAG)"
-	@cd runner && \
-	DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker build \
-		--platform $(PLATFORM) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
-		--build-arg COMMIT_SHA=$(COMMIT_SHA) \
-		-t $(RUNNER_IMAGE):$(TAG) \
-		-t $(RUNNER_IMAGE):$(COMMIT_SHA) \
-		.
-	@echo "✅ Runner image built successfully"
+## --- develop -----------------------------------------------------------------
 
-## Push both images
-push: push-kms push-runner
+test: test-kms test-runner ## Run all tests
 
-## Push KMS image
-push-kms:
-	@echo "📤 Pushing KMS image..."
-	@docker push $(KMS_IMAGE):$(TAG)
-	@docker push $(KMS_IMAGE):$(COMMIT_SHA)
-	@echo "✅ KMS image pushed successfully"
+test-kms: ## Go unit tests for the KMS
+	cd kms && go vet ./... && go test -race ./...
 
-## Push Runner image
-push-runner:
-	@echo "📤 Pushing Runner image..."
-	@docker push $(RUNNER_IMAGE):$(TAG)
-	@docker push $(RUNNER_IMAGE):$(COMMIT_SHA)
-	@echo "✅ Runner image pushed successfully"
+test-runner: ## Hermetic tests for the runner entrypoint
+	bash runner/test/entrypoint_test.sh
 
-## Tag images with branch name
-tag:
-	@echo "🏷️  Tagging images with branch: $(BRANCH)"
-	@docker tag $(KMS_IMAGE):$(TAG) $(KMS_IMAGE):$(BRANCH)
-	@docker tag $(RUNNER_IMAGE):$(TAG) $(RUNNER_IMAGE):$(BRANCH)
-	@echo "✅ Images tagged successfully"
+build: build-kms build-runner ## Build both images for the local platform
 
-## Push branch tags
-push-branch-tags: tag
-	@echo "📤 Pushing branch tags..."
-	@docker push $(KMS_IMAGE):$(BRANCH)
-	@docker push $(RUNNER_IMAGE):$(BRANCH)
-	@echo "✅ Branch tags pushed successfully"
+build-kms: ## Build the KMS image
+	docker buildx build --load --build-arg VERSION=$(VERSION) -t $(KMS_IMAGE):$(TAG) kms
 
-## Clean local images
-clean:
-	@echo "🧹 Cleaning local images..."
-	@docker rmi $(KMS_IMAGE):$(TAG) $(KMS_IMAGE):$(COMMIT_SHA) 2>/dev/null || true
-	@docker rmi $(RUNNER_IMAGE):$(TAG) $(RUNNER_IMAGE):$(COMMIT_SHA) 2>/dev/null || true
-	@echo "✅ Local images cleaned"
+build-runner: ## Build the runner image (RUNNER_VERSION=x.y.z to override)
+	docker buildx build --load --build-arg GITHUB_RUNNER_VERSION=$(RUNNER_VERSION) -t $(RUNNER_IMAGE):$(TAG) runner
 
-## Test images locally
-test: test-kms test-runner
+login: ## Log in to GHCR using the gh CLI (needs the write:packages scope)
+	gh auth token | docker login $(REGISTRY) -u "$$(gh api user --jq .login)" --password-stdin
 
-## Test KMS image
-test-kms:
-	@echo "🧪 Testing KMS image..."
-	@docker run --rm -d --name kms-test -p 3001:3000 \
-		-e PAT_test=dummy_token \
-		$(KMS_IMAGE):$(TAG) && \
-	sleep 3 && \
-	curl -f http://localhost:3001/health && \
-	docker stop kms-test && \
-	echo "✅ KMS image test passed" || \
-	(docker stop kms-test 2>/dev/null; echo "❌ KMS image test failed"; exit 1)
+push: ## Build multi-arch images and push them to GHCR
+	docker buildx build --platform $(PLATFORMS) --push --build-arg VERSION=$(VERSION) -t $(KMS_IMAGE):$(TAG) kms
+	docker buildx build --platform $(PLATFORMS) --push --build-arg GITHUB_RUNNER_VERSION=$(RUNNER_VERSION) -t $(RUNNER_IMAGE):$(TAG) runner
 
-## Test Runner image (basic check)
-test-runner:
-	@echo "🧪 Testing Runner image..."
-	@docker run --rm $(RUNNER_IMAGE):$(TAG) /bin/bash -c "which git && which curl && which jq" && \
-	echo "✅ Runner image test passed" || \
-	(echo "❌ Runner image test failed"; exit 1)
-
-## Show build information
-info:
-	@echo "📋 Build Information:"
-	@echo "  Registry:     $(REGISTRY)"
-	@echo "  Namespace:    $(NAMESPACE)"
-	@echo "  Tag:          $(TAG)"
-	@echo "  Commit SHA:   $(COMMIT_SHA)"
-	@echo "  Branch:       $(BRANCH)"
-	@echo "  Version:      $(VERSION)"
-	@echo "  Build Date:   $(BUILD_DATE)"
-	@echo "  Platform:     $(PLATFORM)"
-	@echo ""
-	@echo "📦 Image Names:"
-	@echo "  KMS:          $(KMS_IMAGE):$(TAG)"
-	@echo "  Runner:       $(RUNNER_IMAGE):$(TAG)"
-
-## Build and push everything (common workflow)
-release: build test push
-	@echo "🚀 Release completed successfully!"
-
-## Build and push with branch tags
-deploy: build push push-branch-tags
-	@echo "🚀 Deployment completed successfully!"
-
-## Quick build for development
-dev: build-kms test-kms
-	@echo "🔧 Development build completed!"
-
-## Show Docker system information
-docker-info:
-	@echo "🐳 Docker Information:"
-	@docker version --format "  Version: {{.Server.Version}}"
-	@docker system df
-	@echo ""
-	@echo "📦 Local Images:"
-	@docker images | grep -E "($(NAMESPACE)|gha-runner)" || echo "  No local images found"
-
-## Login status check
-check-login:
-	@echo "🔐 Checking registry login status..."
-	@docker system info | grep -i "$(REGISTRY)" && \
-	echo "✅ Logged in to $(REGISTRY)" || \
-	echo "❌ Not logged in to $(REGISTRY). Run: docker login $(REGISTRY)"
-
-## Full workflow with checks
-full: info check-login build test push
-	@echo "🎉 Full build and push workflow completed!"
-
-## Clean Docker system
-docker-clean:
-	@echo "🧹 Cleaning Docker system..."
-	@docker system prune -f
-	@echo "✅ Docker system cleaned"
+runner-version: ## Print the latest actions/runner release
+	@gh api repos/actions/runner/releases/latest --jq .tag_name
