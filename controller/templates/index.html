@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>oease · GitHub Runners</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: white; text-align: center; margin-bottom: 6px; font-size: 2.2rem; text-shadow: 2px 2px 4px rgba(0,0,0,0.2); }
+        .subtitle { color: rgba(255,255,255,0.9); text-align: center; margin-bottom: 24px; font-size: 0.95rem; }
+        .subtitle a { color: white; }
+        .top-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .top-stat-card { background: white; padding: 18px 20px; border-radius: 15px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .top-stat-value { font-size: 2.2rem; font-weight: bold; color: #667eea; }
+        .top-stat-label { color: #666; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; }
+        .card { background: white; border-radius: 15px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .card h2 { font-size: 1.2rem; border-bottom: 2px solid #667eea; padding-bottom: 10px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+        .banner { border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; background: #fff7ed; color: #9a3412; border-left: 4px solid #f97316; }
+        .banner.error { background: #fef2f2; color: #991b1b; border-color: #ef4444; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+        th { color: #666; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        code, .mono { font-family: 'SF Mono', 'Courier New', monospace; font-size: 0.88rem; }
+        .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+        .pill.green { background: #dcfce7; color: #166534; }
+        .pill.amber { background: #fef3c7; color: #92400e; }
+        .pill.red { background: #fee2e2; color: #991b1b; }
+        .pill.gray { background: #f1f5f9; color: #475569; }
+        .pill.blue { background: #dbeafe; color: #1e40af; }
+        button { border: none; border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer; font-size: 0.85rem; background: #667eea; color: white; }
+        button:hover { filter: brightness(1.08); }
+        button.secondary { background: #e2e8f0; color: #1e293b; }
+        button.danger { background: #ef4444; }
+        button.small { padding: 5px 10px; font-size: 0.78rem; }
+        button:disabled { opacity: 0.5; cursor: default; }
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        form.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 22px; }
+        form.settings label { display: flex; flex-direction: column; font-size: 0.82rem; color: #555; font-weight: 600; gap: 5px; }
+        form.settings label.check { flex-direction: row; align-items: center; gap: 10px; }
+        form.settings input[type=text], form.settings input[type=number], form.settings textarea { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.92rem; font-family: inherit; }
+        form.settings textarea { font-family: 'SF Mono', 'Courier New', monospace; min-height: 60px; }
+        form.settings .full { grid-column: 1 / -1; }
+        .hint { font-weight: 400; color: #888; font-size: 0.76rem; }
+        .events { max-height: 320px; overflow-y: auto; font-size: 0.85rem; }
+        .events div { padding: 5px 0; border-bottom: 1px solid #f5f5f5; display: flex; gap: 12px; }
+        .events time { color: #999; white-space: nowrap; font-family: 'SF Mono', 'Courier New', monospace; font-size: 0.78rem; }
+        .events .ERROR { color: #b91c1c; }
+        .events .WARN { color: #b45309; }
+        #toast { position: fixed; bottom: 20px; right: 20px; background: #1e293b; color: white; padding: 12px 16px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: none; max-width: 420px; font-size: 0.9rem; }
+        .footer { text-align: center; color: rgba(255,255,255,0.85); font-size: 0.8rem; margin-top: 10px; }
+        .footer a { color: white; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🚀 oease GitHub Runners</h1>
+    <p class="subtitle">Runners for <a href="{{.GitHubURL}}">{{.Target}}</a> · controller {{.Version}} · last reconcile <span id="lastpass">{{since .LastPass}}</span> ago</p>
+
+    {{if .DockerError}}<div class="banner error">Docker: {{.DockerError}}</div>{{end}}
+    {{if .GitHubError}}<div class="banner">GitHub API unavailable (runner status unknown, scaling continues): {{.GitHubError}}</div>{{end}}
+    {{if .Pulling}}<div class="banner">Pulling <code>{{.Settings.Image}}</code>…</div>{{end}}
+
+    <div class="top-stats">
+        <div class="top-stat-card"><div class="top-stat-value" id="stat-desired">{{.Settings.Count}}</div><div class="top-stat-label">Desired</div></div>
+        <div class="top-stat-card"><div class="top-stat-value" id="stat-running">–</div><div class="top-stat-label">Running</div></div>
+        <div class="top-stat-card"><div class="top-stat-value" id="stat-busy">–</div><div class="top-stat-label">Busy</div></div>
+        <div class="top-stat-card"><div class="top-stat-value" id="stat-draining">–</div><div class="top-stat-label">Draining</div></div>
+    </div>
+
+    <div class="card">
+        <h2>
+            <span>🖥️ Runners</span>
+            <span class="actions">
+                <button class="secondary small" onclick="scale(-1)">− 1</button>
+                <button class="secondary small" onclick="scale(1)">+ 1</button>
+                <button class="secondary small" onclick="post('/api/pull', 'Pulling image; outdated runners roll as they go idle')">⬇ Pull &amp; roll</button>
+                <button class="secondary small" onclick="post('/api/reconcile', 'Reconciling')">↻ Reconcile</button>
+            </span>
+        </h2>
+        <table>
+            <thead><tr><th>Name</th><th>Container</th><th>GitHub</th><th>Age</th><th>Image</th><th></th></tr></thead>
+            <tbody id="runners">
+            {{range .Runners}}
+            <tr>
+                <td class="mono">{{.Name}}</td>
+                <td>{{.State}}{{if .Health}} · {{.Health}}{{end}}</td>
+                <td>{{.GitHubStatus}}{{if .Busy}} · busy{{end}}</td>
+                <td>{{since .Created}}</td>
+                <td class="mono">{{short .Generation}}{{if .Stale}} (outdated){{end}}{{if .Draining}} · draining: {{.DrainReason}}{{end}}</td>
+                <td></td>
+            </tr>
+            {{else}}
+            <tr><td colspan="6" style="color:#888">No runners yet.</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2><span>⚙️ Settings</span><span class="hint">Saved to /data/settings.json · applied by the next reconcile; changes that reshape runners roll them one at a time</span></h2>
+        <form class="settings" id="settings" onsubmit="saveSettings(event)">
+            <label>Desired runners <input type="number" name="count" min="0" max="200" value="{{.Settings.Count}}"></label>
+            <label>Labels <span class="hint">comma-separated; self-hosted/Linux/arch are automatic</span><input type="text" name="labels" value="{{.Settings.Labels}}" placeholder="docker,oease"></label>
+            <label>Runner group <span class="hint">organization runners only</span><input type="text" name="group" value="{{.Settings.Group}}" placeholder="Default"></label>
+            <label>Graceful stop (seconds) <span class="hint">how long a stopping runner waits for its job</span><input type="number" name="graceful_stop_seconds" min="0" value="{{.Settings.GracefulStopSeconds}}"></label>
+            <label class="full">Image <input type="text" name="image" value="{{.Settings.Image}}"></label>
+            <label>Host work directory base <span class="hint">optional; enables volume mounts inside jobs</span><input type="text" name="work_base" value="{{.Settings.WorkBase}}" placeholder="/srv/gha"></label>
+            <label class="full">Extra environment for runners <span class="hint">KEY=value per line, e.g. ADDITIONAL_PACKAGES=kubectl</span><textarea name="extra_env">{{.Settings.ExtraEnv}}</textarea></label>
+            <label class="check"><input type="checkbox" name="docker_socket" {{if .Settings.DockerSocket}}checked{{end}}> Mount the host Docker socket into runners (jobs can build/run images)</label>
+            <label class="check"><input type="checkbox" name="ephemeral" {{if .Settings.Ephemeral}}checked{{end}}> Ephemeral runners (one job per container, then replaced)</label>
+            <div class="full actions"><button type="submit">Save settings</button><span class="hint" id="settings-msg"></span></div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2><span>📜 Events</span></h2>
+        <div class="events" id="events">
+            {{range .Events}}<div><time>{{.Time.Format "15:04:05"}}</time><span class="{{.Level}}">{{.Message}}</span></div>{{else}}<div style="color:#888">Nothing yet.</div>{{end}}
+        </div>
+    </div>
+    <p class="footer"><a href="https://github.com/oeasenet/gha-docker-runner">oease / gha-docker-runner</a></p>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function toast(msg, isError) {
+    const el = $('#toast'); el.textContent = msg; el.style.background = isError ? '#991b1b' : '#1e293b'; el.style.display = 'block';
+    clearTimeout(el._t); el._t = setTimeout(() => el.style.display = 'none', 4000);
+}
+async function call(method, path, body) {
+    const res = await fetch(path, {method, headers: body ? {'Content-Type': 'application/json'} : {}, body: body ? JSON.stringify(body) : undefined});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || (res.status + ' ' + res.statusText));
+    return data;
+}
+async function post(path, msg, body) {
+    try { await call('POST', path, body); toast(msg); setTimeout(refresh, 800); } catch (e) { toast(e.message, true); }
+}
+function scale(delta) { post('/api/scale', 'Desired count changed', {delta}); }
+function runnerAction(name, action) {
+    if (action === 'destroy' && !confirm('Destroy ' + name + ' and lower the desired count by one?')) return;
+    post('/api/runners/' + encodeURIComponent(name) + '/' + action, name + ': ' + action);
+}
+async function saveSettings(ev) {
+    ev.preventDefault();
+    const f = ev.target;
+    const body = {
+        count: parseInt(f.count.value, 10), labels: f.labels.value, group: f.group.value, image: f.image.value,
+        ephemeral: f.ephemeral.checked, docker_socket: f.docker_socket.checked, work_base: f.work_base.value,
+        extra_env: f.extra_env.value, graceful_stop_seconds: parseInt(f.graceful_stop_seconds.value, 10)
+    };
+    try { await call('PUT', '/api/settings', body); $('#settings-msg').textContent = 'Saved.'; toast('Settings saved'); setTimeout(refresh, 800); }
+    catch (e) { $('#settings-msg').textContent = e.message; toast(e.message, true); }
+}
+function pill(text, cls) { return '<span class="pill ' + cls + '">' + text + '</span>'; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function age(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return Math.floor(s) + 's'; if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 172800) return Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm'; return Math.floor(s / 86400) + 'd';
+}
+function render(st) {
+    $('#stat-desired').textContent = st.settings.count;
+    const runners = st.runners || [];
+    $('#stat-running').textContent = runners.filter(r => r.state === 'running' && !r.draining).length;
+    $('#stat-busy').textContent = runners.filter(r => r.busy).length;
+    $('#stat-draining').textContent = runners.filter(r => r.draining).length;
+    $('#lastpass').textContent = st.last_pass && !st.last_pass.startsWith('0001') ? age(st.last_pass) : 'never';
+    const rows = runners.map(r => {
+        const state = r.state === 'running' ? pill(r.health ? 'running · ' + r.health : 'running', r.health === 'unhealthy' ? 'red' : 'green') : pill(r.state, 'amber');
+        let gh = r.github_status === 'online' ? pill('online', 'green') : r.github_status === 'offline' ? pill('offline', 'red') : pill(r.github_status, 'gray');
+        if (r.busy) gh += ' ' + pill('busy', 'blue');
+        let img = '<span class="mono">' + esc(r.generation.slice(0, 12)) + '</span>';
+        if (r.stale) img += ' ' + pill('outdated', 'amber');
+        if (r.draining) img += ' ' + pill('draining: ' + esc(r.drain_reason), 'amber');
+        if (r.ephemeral) img += ' ' + pill('ephemeral', 'gray');
+        const actions = r.draining ? '' :
+            '<button class="secondary small" onclick="runnerAction(\'' + esc(r.name) + '\',\'recreate\')">Recreate</button> ' +
+            '<button class="danger small" onclick="runnerAction(\'' + esc(r.name) + '\',\'destroy\')">Destroy</button>';
+        return '<tr><td class="mono">' + esc(r.name) + '</td><td>' + state + '</td><td>' + gh + '</td><td>' + age(r.created) + '</td><td>' + img + '</td><td class="actions">' + actions + '</td></tr>';
+    });
+    $('#runners').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="6" style="color:#888">No runners yet.</td></tr>';
+    $('#events').innerHTML = (st.events || []).map(e => '<div><time>' + new Date(e.time).toLocaleTimeString() + '</time><span class="' + e.level + '">' + esc(e.message) + '</span></div>').join('') || '<div style="color:#888">Nothing yet.</div>';
+}
+async function refresh() {
+    try { render(await call('GET', '/api/state')); } catch (e) { console.error(e); }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
