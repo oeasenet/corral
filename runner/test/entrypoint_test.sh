@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Hermetic tests for runner/entrypoint.sh.
 #
-# curl, config.sh and the bundled node runtime are replaced by fakes that log
-# their invocations, so the tests need no network, Docker or GitHub access and
-# run on macOS (bash 3.2) as well as Linux. Run: bash runner/test/entrypoint_test.sh
+# config.sh and the bundled node runtime are replaced by fakes that log their
+# invocations, so the tests need no network, Docker or GitHub access and run
+# on macOS (bash 3.2) as well as Linux. Run: bash runner/test/entrypoint_test.sh [test...]
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,42 +15,24 @@ setup() {
     TMP=$(mktemp -d)
     export RUNNER_HOME="$TMP/runner"
     export FAKE_LOG="$TMP/calls.log"
-    export FAKE_CURL_FAIL_TIMES=0
     export FAKE_NODE_BEHAVIOUR=exit
     mkdir -p "$RUNNER_HOME/bin" "$RUNNER_HOME/externals/node20/bin" "$RUNNER_HOME/externals/node24/bin" "$TMP/fakebin"
     : > "$FAKE_LOG"
-
-    cat > "$TMP/fakebin/curl" <<'EOF'
-#!/usr/bin/env bash
-echo "curl $*" >> "$FAKE_LOG"
-count_file="$FAKE_LOG.curlcount"
-n=$(cat "$count_file" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$count_file"
-if [ "$n" -le "${FAKE_CURL_FAIL_TIMES:-0}" ]; then
-    echo "curl: (7) Failed to connect to kms port 3000" >&2
-    exit 7
-fi
-url=""
-for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
-case "$url" in
-    *registration-token) printf 'REGTOKEN' ;;
-    *remove-token) printf 'RMTOKEN' ;;
-    *) echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
-esac
-EOF
 
     cat > "$TMP/fakebin/apt-get" <<'EOF'
 #!/usr/bin/env bash
 echo "apt-get $*" >> "$FAKE_LOG"
 EOF
 
+    cat > "$TMP/fakebin/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "curl $*" >> "$FAKE_LOG"
+exit 7
+EOF
+
     cat > "$RUNNER_HOME/config.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "config.sh $*" >> "$FAKE_LOG"
-if [ "${1:-}" = "remove" ]; then
-    rm -f .runner
-    date +%s > "$FAKE_LOG.removed_at"
-    exit 0
-fi
 echo '{}' > .runner
 echo "$PATH" > .path
 EOF
@@ -58,7 +40,7 @@ EOF
     # Only the newest node runtime is a working fake; the older one must be ignored.
     cat > "$RUNNER_HOME/externals/node24/bin/node" <<'EOF'
 #!/usr/bin/env bash
-echo "node $*" >> "$FAKE_LOG"
+echo "node $* RUNNER_TOKEN=${RUNNER_TOKEN:-unset}" >> "$FAKE_LOG"
 case "${FAKE_NODE_BEHAVIOUR:-exit}" in
     wait)
         trap 'echo "node got INT" >> "$FAKE_LOG"; exit 0' INT
@@ -72,15 +54,14 @@ EOF
     # shellcheck disable=SC2016  # $FAKE_LOG must stay literal inside the fake script
     printf '#!/usr/bin/env bash\necho "WRONG NODE USED" >> "$FAKE_LOG"; exit 99\n' > "$RUNNER_HOME/externals/node20/bin/node"
     : > "$RUNNER_HOME/bin/RunnerService.js"
-    chmod +x "$TMP/fakebin/curl" "$TMP/fakebin/apt-get" "$RUNNER_HOME/config.sh" "$RUNNER_HOME/externals/node24/bin/node" "$RUNNER_HOME/externals/node20/bin/node"
+    chmod +x "$TMP/fakebin/apt-get" "$TMP/fakebin/curl" "$RUNNER_HOME/config.sh" "$RUNNER_HOME/externals/node24/bin/node" "$RUNNER_HOME/externals/node20/bin/node"
 
     ORIG_PATH=$PATH
     export PATH="$TMP/fakebin:$PATH"
-    export KMS_SERVER_ADDR=http://kms:3000
     export RUNNER_REGISTER_TO=oeasenet
-    export KMS_RETRY_INTERVAL=0
-    unset KMS_AUTH_TOKEN RUNNER_NAME RUNNER_NAME_PREFIX RUNNER_LABELS RUNNER_GROUP RUNNER_WORKDIR RUNNER_EPHEMERAL \
-        RUNNER_DISABLE_UPDATE ADDITIONAL_FLAGS ADDITIONAL_PACKAGES RUNNER_GRACEFUL_STOP_TIMEOUT KMS_MAX_ATTEMPTS GITHUB_URL
+    export RUNNER_TOKEN=AREGTOKEN
+    unset RUNNER_NAME RUNNER_NAME_PREFIX RUNNER_LABELS RUNNER_GROUP RUNNER_WORKDIR RUNNER_EPHEMERAL \
+        RUNNER_DISABLE_UPDATE ADDITIONAL_FLAGS ADDITIONAL_PACKAGES RUNNER_GRACEFUL_STOP_TIMEOUT GITHUB_URL
 }
 
 teardown() {
@@ -113,25 +94,51 @@ test_registers_org_runner_with_all_configured_flags() {
     export RUNNER_NAME=my-runner RUNNER_LABELS=docker,oease RUNNER_WORKDIR=/srv/work RUNNER_GROUP=prod
     run_entrypoint
     assert_status 0
-    assert_log_contains "http://kms:3000/oeasenet/registration-token"
     line=$(config_line)
-    for expected in "--unattended" "--replace" "--url https://github.com/oeasenet" "--token REGTOKEN" \
+    for expected in "--unattended" "--replace" "--url https://github.com/oeasenet" "--token AREGTOKEN" \
         "--name my-runner" "--labels docker,oease" "--work /srv/work" "--runnergroup prod"; do
         case "$line" in *"$expected"*) ;; *) fail "config.sh call missing '$expected': $line" ;; esac
     done
     assert_log_contains "bin/RunnerService.js"
     assert_log_not_contains "WRONG NODE USED"
-    assert_log_contains "http://kms:3000/oeasenet/remove-token"
-    assert_log_contains "config.sh remove --token RMTOKEN"
 }
 
-test_registers_repo_runner_using_repo_endpoints() {
+test_registers_repo_runner() {
     export RUNNER_REGISTER_TO=oeasenet/platform
     run_entrypoint
     assert_status 0
-    assert_log_contains "http://kms:3000/repo/oeasenet/platform/registration-token"
     assert_log_contains "--url https://github.com/oeasenet/platform"
-    assert_log_contains "http://kms:3000/repo/oeasenet/platform/remove-token"
+}
+
+test_token_is_not_exposed_to_the_listener_or_jobs() {
+    run_entrypoint
+    assert_status 0
+    assert_log_contains "RUNNER_TOKEN=unset"
+}
+
+test_skips_registration_when_already_configured() {
+    echo '{"agentName":"x"}' > "$RUNNER_HOME/.runner"
+    unset RUNNER_TOKEN
+    run_entrypoint
+    assert_status 0
+    assert_log_not_contains "config.sh"
+    assert_log_contains "bin/RunnerService.js"
+}
+
+test_fails_fast_without_token_when_not_configured() {
+    unset RUNNER_TOKEN
+    run_entrypoint
+    assert_status 1
+    assert_log_not_contains "config.sh"
+    grep -q "RUNNER_TOKEN" "$TMP/stderr" || fail "error message should name RUNNER_TOKEN"
+}
+
+test_fails_fast_without_target() {
+    unset RUNNER_REGISTER_TO
+    run_entrypoint
+    assert_status 1
+    assert_log_not_contains "config.sh"
+    grep -q "RUNNER_REGISTER_TO" "$TMP/stderr" || fail "error message should name RUNNER_REGISTER_TO"
 }
 
 test_defaults_name_to_hostname_and_omits_optional_flags() {
@@ -160,49 +167,11 @@ test_explicit_name_wins_over_prefix() {
     assert_log_not_contains "oease-prod"
 }
 
-test_sends_bearer_token_to_kms_when_configured() {
-    export KMS_AUTH_TOKEN=s3cret
-    run_entrypoint
-    assert_status 0
-    assert_log_contains "Authorization: Bearer s3cret"
-}
-
-test_sends_no_authorization_header_by_default() {
-    run_entrypoint
-    assert_status 0
-    assert_log_not_contains "Authorization"
-}
-
-test_retries_until_kms_is_reachable() {
-    export FAKE_CURL_FAIL_TIMES=2
-    run_entrypoint
-    assert_status 0
-    n=$(grep -c "registration-token" "$FAKE_LOG")
-    [ "$n" -eq 3 ] || fail "expected 3 registration attempts (2 failures + 1 success), got $n"
-    assert_log_contains "config.sh --"
-}
-
-test_gives_up_after_max_attempts_without_registering() {
-    export FAKE_CURL_FAIL_TIMES=100 KMS_MAX_ATTEMPTS=3
-    run_entrypoint
-    [ "$ENTRY_STATUS" -ne 0 ] || fail "expected a non-zero exit when the KMS never answers"
-    n=$(grep -c "registration-token" "$FAKE_LOG")
-    [ "$n" -eq 3 ] || fail "expected exactly 3 attempts, got $n"
-    assert_log_not_contains "config.sh --"
-}
-
-test_ephemeral_runner_gets_flag_and_is_not_deregistered_after_clean_exit() {
-    export RUNNER_EPHEMERAL=true
+test_ephemeral_and_disable_update_flags() {
+    export RUNNER_EPHEMERAL=true RUNNER_DISABLE_UPDATE=true
     run_entrypoint
     assert_status 0
     assert_log_contains "--ephemeral"
-    assert_log_not_contains "config.sh remove"
-}
-
-test_disable_update_flag() {
-    export RUNNER_DISABLE_UPDATE=true
-    run_entrypoint
-    assert_status 0
     assert_log_contains "--disableupdate"
 }
 
@@ -220,7 +189,7 @@ test_installs_additional_packages_before_registering() {
     assert_log_contains "apt-get install -y --no-install-recommends kubectl awscli"
     apt_line=$(grep -n "apt-get install" "$FAKE_LOG" | head -n1 | cut -d: -f1)
     config_line_no=$(grep -n "config.sh --" "$FAKE_LOG" | head -n1 | cut -d: -f1)
-    [ "$apt_line" -lt "$config_line_no" ] || fail "packages must be installed before registration"
+    [ -n "$config_line_no" ] && [ "$apt_line" -lt "$config_line_no" ] || fail "packages must be installed before registration"
 }
 
 test_custom_github_url_for_enterprise() {
@@ -230,28 +199,19 @@ test_custom_github_url_for_enterprise() {
     assert_log_contains "--url https://github.example.com/oeasenet"
 }
 
-test_fails_fast_without_required_environment() {
-    unset RUNNER_REGISTER_TO
+test_never_calls_out_over_the_network_itself() {
     run_entrypoint
-    assert_status 1
+    assert_status 0
     assert_log_not_contains "curl"
-    grep -q "RUNNER_REGISTER_TO" "$TMP/stderr" || fail "error message should name the missing variable"
-
-    export RUNNER_REGISTER_TO=oeasenet
-    unset KMS_SERVER_ADDR
-    run_entrypoint
-    assert_status 1
-    grep -q "KMS_SERVER_ADDR" "$TMP/stderr" || fail "error message should name the missing variable"
 }
 
-test_listener_crash_still_deregisters_and_propagates_status() {
+test_listener_crash_propagates_status() {
     export FAKE_NODE_BEHAVIOUR=crash
     run_entrypoint
     assert_status 2
-    assert_log_contains "config.sh remove --token RMTOKEN"
 }
 
-test_graceful_stop_waits_for_running_job_then_deregisters() {
+test_graceful_stop_waits_for_running_job_then_stops_listener() {
     export FAKE_NODE_BEHAVIOUR=wait
     bash "$ENTRYPOINT" >"$TMP/stdout" 2>"$TMP/stderr" &
     entry_pid=$!
@@ -266,13 +226,12 @@ test_graceful_stop_waits_for_running_job_then_deregisters() {
 
     kill -TERM "$entry_pid"
     wait "$entry_pid"; ENTRY_STATUS=$?
+    stopped_at=$(date +%s)
     wait "$job_pid" 2>/dev/null
 
     assert_status 0
     assert_log_contains "node got TERM"
-    assert_log_contains "config.sh remove --token RMTOKEN"
-    removed_at=$(cat "$FAKE_LOG.removed_at" 2>/dev/null || echo 0)
-    [ "$removed_at" -ge $((job_started + 3)) ] || fail "deregistered at $removed_at before the job finished (started $job_started, 3s long)"
+    [ "$stopped_at" -ge $((job_started + 3)) ] || fail "stopped at $stopped_at before the 3s job finished (started $job_started)"
 }
 
 test_graceful_stop_gives_up_waiting_after_timeout() {
@@ -288,12 +247,12 @@ test_graceful_stop_gives_up_waiting_after_timeout() {
 
     kill -TERM "$entry_pid"
     wait "$entry_pid"; ENTRY_STATUS=$?
+    stopped_at=$(date +%s)
     kill "$job_pid" 2>/dev/null; wait "$job_pid" 2>/dev/null
 
     assert_status 0
-    assert_log_contains "config.sh remove --token RMTOKEN"
-    removed_at=$(cat "$FAKE_LOG.removed_at" 2>/dev/null || echo 0)
-    [ "$removed_at" -lt $((job_started + 5)) ] || fail "should have stopped after the 1s timeout, deregistered at $removed_at (job started $job_started)"
+    assert_log_contains "node got TERM"
+    [ "$stopped_at" -lt $((job_started + 5)) ] || fail "should have stopped after the 1s timeout, stopped at $stopped_at (job started $job_started)"
 }
 
 # ---------------------------------------------------------------------------

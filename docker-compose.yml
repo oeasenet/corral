@@ -1,65 +1,42 @@
-# oease GitHub Actions self-hosted runners
+# oease GitHub Actions runners: one controller container manages the runner fleet.
 #
-#   cp .env.example .env      # fill in GITHUB_OWNER, GITHUB_PAT, KMS_AUTH_TOKEN
+#   cp .env.example .env      # fill in GITHUB_PAT and ADMIN_PASSWORD
 #   docker compose up -d
+#   open http://127.0.0.1:8080  (user: admin)
 #
-# Scale with RUNNER_REPLICAS in .env. Update with: docker compose pull && docker compose up -d
+# Everything else (runner count, labels, image, ephemeral…) is changed live in the UI.
 
 services:
-    kms:
-        image: ghcr.io/oeasenet/gha-docker-runner/kms:${IMAGE_TAG:-latest}
+    gha-controller:
+        image: ghcr.io/oeasenet/gha-docker-runner/controller:${IMAGE_TAG:-latest}
         restart: unless-stopped
         environment:
             - TZ=${TZ:-UTC}
-            - PAT_${GITHUB_OWNER:?set GITHUB_OWNER in .env}=${GITHUB_PAT:?set GITHUB_PAT in .env}
-            - KMS_AUTH_TOKEN=${KMS_AUTH_TOKEN:?set KMS_AUTH_TOKEN in .env (openssl rand -hex 32)}
+            - GITHUB_OWNER=${GITHUB_OWNER:?set GITHUB_OWNER in .env}
+            - GITHUB_PAT=${GITHUB_PAT:?set GITHUB_PAT in .env}
+            - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env (openssl rand -hex 16)}
+            # Initial values only; the UI owns them after the first start.
+            - RUNNER_COUNT=${RUNNER_COUNT:-2}
+            - RUNNER_LABELS=${RUNNER_LABELS:-}
+            - RUNNER_IMAGE=${RUNNER_IMAGE:-ghcr.io/oeasenet/gha-docker-runner/runner:${IMAGE_TAG:-latest}}
+            # Needed only while the runner package on GHCR is private.
+            - REGISTRY_USERNAME=${REGISTRY_USERNAME:-}
+            - REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-}
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - gha-data:/data
         ports:
-            # Dashboard + API, bound to localhost only by default.
-            # Set KMS_BIND_ADDR=0.0.0.0 (or front it with Traefik) to expose it.
-            - "${KMS_BIND_ADDR:-127.0.0.1}:${KMS_PORT:-3000}:3000"
+            # Dashboard, bound to localhost by default. Set BIND_ADDR=0.0.0.0 or front it with Traefik.
+            - "${BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"
         healthcheck:
-            test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:3000/health" ]
+            test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8080/health" ]
             interval: 30s
             timeout: 5s
             retries: 3
-            start_period: 5s
+            start_period: 10s
         labels:
+            # Safe to auto-update: runners keep working while the controller restarts.
             - com.centurylinklabs.watchtower.enable=true
-        networks:
-            - runners
 
-    runner:
-        image: ghcr.io/oeasenet/gha-docker-runner/runner:${IMAGE_TAG:-latest}
-        restart: unless-stopped
-        deploy:
-            replicas: ${RUNNER_REPLICAS:-2}
-        depends_on:
-            kms:
-                condition: service_healthy
-        environment:
-            - TZ=${TZ:-UTC}
-            - KMS_SERVER_ADDR=http://kms:3000
-            - KMS_AUTH_TOKEN=${KMS_AUTH_TOKEN}
-            - RUNNER_REGISTER_TO=${RUNNER_REGISTER_TO:-${GITHUB_OWNER}}
-            - RUNNER_NAME_PREFIX=${RUNNER_NAME_PREFIX:-oease}
-            - RUNNER_LABELS=${RUNNER_LABELS:-}
-            - RUNNER_GROUP=${RUNNER_GROUP:-}
-            - RUNNER_EPHEMERAL=${RUNNER_EPHEMERAL:-false}
-            - RUNNER_DISABLE_UPDATE=${RUNNER_DISABLE_UPDATE:-false}
-            - RUNNER_GRACEFUL_STOP_TIMEOUT=${RUNNER_GRACEFUL_STOP_TIMEOUT:-900}
-            - ADDITIONAL_PACKAGES=${ADDITIONAL_PACKAGES:-}
-        volumes:
-            # Lets jobs run `docker build` / `docker run` through the host daemon.
-            # Remove if workflows never need Docker (it is root-equivalent on the host).
-            - /var/run/docker.sock:/var/run/docker.sock
-        # A stopping runner finishes its current job first (RUNNER_GRACEFUL_STOP_TIMEOUT);
-        # the grace period must be longer than that.
-        stop_grace_period: 16m
-        labels:
-            # Never let Watchtower restart runners mid-job; roll them with `make update`.
-            - com.centurylinklabs.watchtower.enable=false
-        networks:
-            - runners
-
-networks:
-    runners:
+volumes:
+    gha-data:

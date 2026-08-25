@@ -1,52 +1,50 @@
 # oease GitHub Actions Runners
 
-Self-hosted GitHub Actions runners for [oease](https://github.com/oeasenet), packaged as two Docker images:
-
-- **`ghcr.io/oeasenet/gha-docker-runner/kms`** – a small Key Management Service that holds the GitHub PAT and hands
-  short-lived registration tokens to runners. The PAT never enters a runner container.
-- **`ghcr.io/oeasenet/gha-docker-runner/runner`** – an Ubuntu 24.04 runner with the current
-  [actions/runner](https://github.com/actions/runner), Docker CLI (buildx + compose), and common build tooling.
-  It registers itself through the KMS on start, self-updates, and deregisters cleanly on stop.
+Self-hosted GitHub Actions runners for [oease](https://github.com/oeasenet), run by **one container**:
+the controller talks to the host's Docker daemon, keeps the desired number of runner containers registered
+with GitHub, replaces broken or outdated ones, and gives you a small web UI to change all of that at runtime.
 
 [![Build and Push Images](https://github.com/oeasenet/gha-docker-runner/actions/workflows/docker-build-push.yml/badge.svg)](https://github.com/oeasenet/gha-docker-runner/actions/workflows/docker-build-push.yml)
 
 ```mermaid
 graph LR
-    subgraph host["Runner host (docker compose)"]
-        KMS["kms<br/>holds PAT_oeasenet"]
-        R1["runner ×N"]
+    subgraph host["Docker host"]
+        C["gha-controller<br/>GITHUB_PAT · settings · web UI"]
+        R1["runner"]
+        R2["runner"]
+        R3["runner …"]
     end
-    R1 -- "GET /oeasenet/registration-token<br/>Authorization: Bearer KMS_AUTH_TOKEN" --> KMS
-    KMS -- "POST /orgs/oeasenet/actions/runners/registration-token<br/>Bearer PAT" --> GH["GitHub API"]
-    R1 -- "runs jobs" --> GH
+    C -- "Docker socket: create / stop / remove" --> R1
+    C -- " " --> R2
+    C -- " " --> R3
+    C -- "registration tokens, runner list, delete" --> GH["GitHub API"]
+    R1 -- "jobs" --> GH
 ```
+
+Two images, both built for `linux/amd64` and `linux/arm64`:
+
+- **`ghcr.io/oeasenet/gha-docker-runner/controller`** – the manager (Go, no dependencies, ~20 MB).
+- **`ghcr.io/oeasenet/gha-docker-runner/runner`** – Ubuntu 24.04 with the current
+  [actions/runner](https://github.com/actions/runner), Docker CLI (buildx + compose) and common build tooling.
 
 ## Deploy
 
-Requirements on the host: Docker Engine with Compose v2, and access to GHCR (the packages are private, so
-`docker login ghcr.io` with a PAT that has `read:packages`).
+On a host with Docker Engine + Compose v2:
 
 ```bash
 git clone https://github.com/oeasenet/gha-docker-runner.git && cd gha-docker-runner
-cp .env.example .env
-# edit .env: GITHUB_PAT, KMS_AUTH_TOKEN (openssl rand -hex 32), optionally RUNNER_REPLICAS / RUNNER_LABELS
+cp .env.example .env         # set GITHUB_PAT and ADMIN_PASSWORD (openssl rand -hex 16)
 docker compose up -d          # or: make up
+open http://127.0.0.1:8080    # user: admin
 ```
 
-The runners appear under **Organization → Settings → Actions → Runners** within a minute, named
-`oease-<container id>`, with labels `self-hosted`, `Linux`, `X64`/`ARM64` plus anything in `RUNNER_LABELS`.
-Target them from workflows with `runs-on: self-hosted` (or `runs-on: [self-hosted, <label>]`).
+The controller pulls the runner image, creates `RUNNER_COUNT` containers named `oease-<id>` and they appear
+under **Organization → Settings → Actions → Runners** within a minute, labelled `self-hosted`, `Linux`,
+`X64`/`ARM64` plus whatever you configure. Target them with `runs-on: self-hosted` (or `[self-hosted, <label>]`).
 
-| Operation                 | Command                                                       |
-|---------------------------|---------------------------------------------------------------|
-| Status / logs             | `make ps` · `make logs`                                       |
-| Scale                     | set `RUNNER_REPLICAS` in `.env`, then `docker compose up -d`  |
-| Update to latest images   | `make update` (`docker compose pull && docker compose up -d`) |
-| Stop                      | `make down` – runners finish their current job, then deregister |
-| KMS dashboard             | http://127.0.0.1:3000 on the host (stats, configured owners, health) |
-
-Stopping a runner waits up to `RUNNER_GRACEFUL_STOP_TIMEOUT` (15 min) for an in-flight job, then removes the
-registration from GitHub, so the runner list stays clean. The compose `stop_grace_period` is set accordingly.
+If the GHCR packages are private, the host needs `docker login ghcr.io` for the controller image, and the
+controller needs `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` (a PAT with `read:packages`) to pull the runner image
+through the daemon. Making the packages public removes both steps.
 
 ### The PAT
 
@@ -55,119 +53,129 @@ registration from GitHub, so the runner list stays clean. The compose `stop_grac
 - classic token: `admin:org` for organization runners, `repo` for repository runners
 - fine-grained token: organization permission **Self-hosted runners: Read and write**
 
-Rotate it by editing `.env` and running `docker compose up -d kms`. Several owners can be served by one KMS: add
-`PAT_<owner>` variables to the `kms` service (or mount a JSON file `{"owner": "pat"}` at `/app/config.json`).
+It never leaves the controller: runners only receive a one-hour registration token at creation. Rotate it by
+editing `.env` and running `docker compose up -d`.
+
+## Day-to-day
+
+Everything below is in the dashboard (`http://127.0.0.1:8080`) and the JSON API behind it.
+
+| Want to…                        | Do                                                                                          |
+|---------------------------------|---------------------------------------------------------------------------------------------|
+| add / remove runners            | **+1 / −1**, or set *Desired runners* and save; extras are drained idle-first               |
+| kill one specific runner        | **Destroy** on its row (waits for its job, removes it, lowers the count by one)             |
+| get a fresh one                 | **Recreate** (same, but keeps the count)                                                    |
+| change labels, group, image…    | edit *Settings*, save: runners are rolled one at a time, idle ones first, never mid-job     |
+| update to a new runner image    | **Pull & roll**: pulls the configured tag, then rolls runners built from the older image    |
+| see what happened               | *Events* (also on `docker compose logs`)                                                    |
+| stop everything                 | scale to 0 (drains all), then `make down`; the controller itself can restart any time — runners keep working without it |
+
+Settings live in the `gha-data` volume (`/data/settings.json`); the `RUNNER_*` variables in `.env` only seed
+them on the first start.
+
+**How the loop works.** Every 30 s (and after every UI action) the controller compares desired and actual
+state: exited or unhealthy containers are removed and replaced, missing runners are created with fresh
+tokens, extra ones are drained (idle and oldest first), outdated ones (settings or image changed) are rolled
+one at a time, and offline GitHub registrations that lost their container are deleted. Draining means
+`docker stop` with the graceful timeout, so the runner finishes its current job first.
+
+**Persistent vs ephemeral.** By default runners are persistent: they take job after job and self-update
+their binary, so a fleet stays current without any action. Tick *Ephemeral* to get a fresh container per job
+(cleanest isolation, ~15 s slower job start, no warm caches); the controller then replaces each runner after
+its job.
+
+**Docker in jobs.** *Mount the host Docker socket into runners* (default on) lets jobs run `docker build`,
+`docker run` and `docker compose` through the host daemon — root-equivalent on the host, so only run trusted
+workflows. Bind mounts inside jobs (`docker run -v $PWD:/x`) resolve on the host; set *Host work directory
+base* (e.g. `/srv/gha`) and each runner gets `/srv/gha/<name>` bound at the identical path so that works too.
 
 ## Configuration
 
-### KMS (`kms` service)
+### Controller (`gha-controller` environment)
 
-| Variable         | Description                                                                              | Default            |
-|------------------|------------------------------------------------------------------------------------------|--------------------|
-| `PAT_<owner>`    | PAT used to mint tokens for `<owner>` (org or user). Repeat per owner.                   | –                  |
-| `KMS_AUTH_TOKEN` | Shared secret; token endpoints require `Authorization: Bearer <token>` when set.         | unset (warns)      |
-| `CONFIG_FILE`    | Optional JSON file with `{"owner": "pat"}` entries; environment variables override it.   | `/app/config.json` |
-| `GITHUB_API_URL` | GitHub REST API base (GitHub Enterprise Server: `https://ghe.example.com/api/v3`).       | `https://api.github.com` |
-| `PORT`           | Listen port.                                                                             | `3000`             |
+| Variable                                  | Description                                                                 | Default                        |
+|-------------------------------------------|-----------------------------------------------------------------------------|--------------------------------|
+| `GITHUB_PAT`                              | PAT that can manage the runners. **Required.**                              | –                              |
+| `GITHUB_OWNER` / `RUNNER_REGISTER_TO`     | Organization, or `owner/repo` for repository runners. **One is required.**  | –                              |
+| `ADMIN_PASSWORD`                          | Dashboard/API password (user `admin`); unset = no auth (warns).             | –                              |
+| `RUNNER_COUNT`, `RUNNER_LABELS`, `RUNNER_GROUP`, `RUNNER_IMAGE`, `RUNNER_EPHEMERAL`, `RUNNER_DOCKER_SOCKET`, `RUNNER_WORK_BASE`, `RUNNER_EXTRA_ENV`, `RUNNER_GRACEFUL_STOP_TIMEOUT` | Initial settings (first start only). | `2`, –, –, runner:latest, `false`, `true`, –, –, `900` |
+| `RUNNER_NAME_PREFIX`                      | Runner names are `<prefix>-<8 hex>`.                                        | `oease`                        |
+| `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` | Credentials for pulling a private runner image.                             | –                              |
+| `DOCKER_HOST`                             | Daemon address (`unix://…` or `tcp://…`).                                   | `unix:///var/run/docker.sock`  |
+| `RUNNER_DOCKER_SOCKET_PATH`               | Host socket path mounted into runners.                                      | `/var/run/docker.sock`         |
+| `RECONCILE_INTERVAL`                      | Loop period.                                                                | `30s`                          |
+| `GITHUB_URL`, `GITHUB_API_URL`            | GitHub Enterprise Server: `https://ghe.example.com`, `https://ghe.example.com/api/v3`. | github.com          |
+| `PORT`, `DATA_DIR`                        | Listen port, settings directory.                                            | `8080`, `/data`                |
 
-Endpoints: `GET /{org}/registration-token`, `GET /{org}/remove-token`, `GET /repo/{owner}/{repo}/registration-token`,
-`GET /repo/{owner}/{repo}/remove-token` (all require the bearer token when `KMS_AUTH_TOKEN` is set), plus the
-unauthenticated `GET /` dashboard, `GET /health`, `GET /api/stats` and `GET /api/config` (never exposes secrets).
-Only owners with a configured PAT are served; anything else is `404`, GitHub failures surface as `502`.
+### API
 
-### Runner (`runner` service)
+All endpoints except `/health` require basic auth when `ADMIN_PASSWORD` is set.
 
-| Variable                       | Description                                                                          | Default            |
-|--------------------------------|--------------------------------------------------------------------------------------|--------------------|
-| `KMS_SERVER_ADDR`              | KMS base URL. **Required.**                                                          | –                  |
-| `RUNNER_REGISTER_TO`           | `org` for organization runners or `owner/repo` for repository runners. **Required.** | –                  |
-| `KMS_AUTH_TOKEN`               | Must match the KMS.                                                                  | –                  |
-| `RUNNER_NAME_PREFIX`           | Runner name becomes `<prefix>-<hostname>` (unique per container).                    | –                  |
-| `RUNNER_NAME`                  | Explicit runner name (only with a single replica).                                   | hostname           |
-| `RUNNER_LABELS`                | Extra labels, comma-separated.                                                       | –                  |
-| `RUNNER_GROUP`                 | Runner group (organization runners).                                                 | Default            |
-| `RUNNER_WORKDIR`               | Job work directory (`--work`).                                                       | `_work`            |
-| `RUNNER_EPHEMERAL`             | `true` = one job per registration, then the container restarts clean.               | `false`            |
-| `RUNNER_DISABLE_UPDATE`        | `true` = never self-update the runner binary (rely on image updates).               | `false`            |
-| `RUNNER_GRACEFUL_STOP_TIMEOUT` | Seconds to wait for a running job on stop.                                           | `900`              |
-| `ADDITIONAL_PACKAGES`          | apt packages installed on start, comma-separated.                                    | –                  |
-| `ADDITIONAL_FLAGS`             | Extra `config.sh` flags, e.g. `--no-default-labels`.                                 | –                  |
-| `GITHUB_URL`                   | GitHub base URL (GitHub Enterprise Server).                                          | `https://github.com` |
-| `KMS_RETRY_INTERVAL` / `KMS_MAX_ATTEMPTS` | Retry pacing while the KMS is unavailable.                                | `5` / `60`         |
+```
+GET  /api/state                         settings, runners (Docker + GitHub status), events
+PUT  /api/settings                      JSON with any of: count, labels, group, image, ephemeral,
+                                        docker_socket, work_base, extra_env, graceful_stop_seconds
+POST /api/scale                         {"delta": 1} or {"count": 5}
+POST /api/runners/{name}/destroy        drain + remove, count − 1
+POST /api/runners/{name}/recreate       drain + remove, replaced on the next pass
+POST /api/pull                          pull the image, roll outdated runners
+POST /api/reconcile                     run a pass now
+GET  /health
+```
 
-**Docker in jobs.** The compose file mounts `/var/run/docker.sock`, so `docker build`, `docker run` and
-`docker compose` work inside jobs through the host daemon. This is root-equivalent on the host: only run trusted
-workflows on these runners, or remove the mount. Bind mounts inside jobs (`docker run -v $PWD:/x`) resolve on the
-host, so they only work if the work directory is bind-mounted at the same path in the container
-(`RUNNER_WORKDIR=/srv/gha/_work` + `- /srv/gha/_work:/srv/gha/_work`), one replica per path.
+### Runner image (standalone use)
 
-**Runner updates.** GitHub stops scheduling jobs on runners that are too far behind the current release. By default
-the runners self-update in place, and CI rebuilds both images weekly with the latest `actions/runner` release, so
-`make update` also moves the fleet forward. Ephemeral runners start from the image every time – pair
-`RUNNER_EPHEMERAL=true` with `RUNNER_DISABLE_UPDATE=true` and keep the image current.
+The controller sets these itself; for a manual `docker run` you need `RUNNER_REGISTER_TO` and a
+`RUNNER_TOKEN` (from `POST /orgs/{org}/actions/runners/registration-token`). Optional: `RUNNER_NAME`,
+`RUNNER_NAME_PREFIX`, `RUNNER_LABELS`, `RUNNER_GROUP`, `RUNNER_WORKDIR`, `RUNNER_EPHEMERAL`,
+`RUNNER_DISABLE_UPDATE`, `RUNNER_GRACEFUL_STOP_TIMEOUT` (900), `ADDITIONAL_PACKAGES` (apt, comma-separated),
+`ADDITIONAL_FLAGS` (extra `config.sh` flags), `GITHUB_URL`. On SIGTERM the entrypoint waits for the running
+job, then stops the listener; deleting the registration is the controller's job.
 
 ## Images and CI
 
-`.github/workflows/docker-build-push.yml` builds and pushes both images to GHCR for `linux/amd64` and
-`linux/arm64`, signed with [cosign](https://github.com/sigstore/cosign) (keyless, via the workflow's OIDC identity).
-No secrets to configure: it authenticates with the workflow's `GITHUB_TOKEN`.
-
-| Trigger                    | What happens                                                                      |
-|----------------------------|-----------------------------------------------------------------------------------|
-| push to `main`             | tests, then builds only the images whose sources changed → `latest`, `main`, `sha-<commit>` |
-| tag `vX.Y.Z`               | builds both → `X.Y.Z`, `X.Y`                                                      |
-| pull request               | tests + `linux/amd64` build, nothing pushed                                       |
-| weekly (Mon 06:00 UTC) / manual | builds both with fresh base images and the latest `actions/runner` release; the runner image also gets a `runner-<version>` tag |
-
-Dependabot keeps the base images, actions and Go modules current; merging its PRs republishes the images.
-
-Verify a signature:
-
-```bash
-cosign verify ghcr.io/oeasenet/gha-docker-runner/runner:latest \
-  --certificate-identity-regexp 'https://github.com/oeasenet/gha-docker-runner/' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-```
+`.github/workflows/docker-build-push.yml` builds both images for amd64 + arm64 and pushes them to GHCR on
+every push to `main` (`latest`, `main`, `sha-<commit>`), on `vX.Y.Z` tags (`X.Y.Z`, `X.Y`) and on manual
+runs, always with the latest `actions/runner` release (the runner image also gets a `runner-<version>` tag).
+It authenticates with the workflow's `GITHUB_TOKEN`; nothing to configure. Dependabot keeps base images and
+actions current.
 
 ## Development
 
 ```bash
-make test            # Go unit tests (KMS) + hermetic bash tests (runner entrypoint)
-make build           # build both images for the local platform
-make build-runner RUNNER_VERSION=2.337.0
-make push TAG=dev    # multi-arch build + push (make login first; needs write:packages)
-make runner-version  # latest actions/runner release
+make test               # Go unit tests (controller) + hermetic bash tests (runner entrypoint)
+make build              # build both images for the local platform
+make push TAG=dev       # multi-arch build + push (make login first; needs write:packages)
+make runner-version     # latest actions/runner release
 ```
 
-Layout:
+Run the controller from source against your local Docker: `cd controller && GITHUB_PAT=… GITHUB_OWNER=… DATA_DIR=/tmp/gha go run .`
 
 ```
-kms/        Go service (stdlib only) + dashboard template + tests
-runner/     Dockerfile, entrypoint.sh, test/entrypoint_test.sh
-docker-compose.yml, .env.example     deployment
-.github/workflows/docker-build-push.yml, .github/dependabot.yml
+controller/   Go service: docker.go (Engine API), github.go, reconciler.go, web.go + templates/, settings.go
+runner/       Dockerfile, entrypoint.sh, test/entrypoint_test.sh
+docker-compose.yml, .env.example, Makefile, docs/superpowers/specs/ (design)
 ```
 
 ## Security notes
 
-- Keep the KMS on the internal compose network; it is only published on `127.0.0.1` by default. Anyone who can
-  reach its token endpoints with the bearer token can register runners for the organization.
-- Always set `KMS_AUTH_TOKEN` in production. Without it the KMS serves tokens to any client that can reach it and
-  logs a warning at start.
-- Use the narrowest PAT that can manage runners, and rotate it periodically.
-- Runners execute workflow code as root inside their container, with access to the host's Docker daemon when the
-  socket is mounted. Treat the runner host as part of your CI trust boundary.
+- The controller and (by default) the runners have the host's Docker socket: root-equivalent on that host.
+  Treat the runner host as part of your CI trust boundary and only run trusted workflows on it.
+- Set `ADMIN_PASSWORD` and keep the dashboard on `127.0.0.1` or behind Traefik; anyone with access can scale
+  runners and read events.
+- The PAT is only in the controller's environment; registration tokens in runner containers expire after
+  one hour and are unset before jobs run.
 
 ## Troubleshooting
 
-| Symptom                                               | Check                                                                          |
-|-------------------------------------------------------|--------------------------------------------------------------------------------|
-| runner logs `KMS unavailable … retrying`              | `docker compose logs kms`; `KMS_AUTH_TOKEN` mismatch shows as `error: 401`     |
-| KMS answers `502 github api returned 401/403/404`     | PAT expired, wrong scopes, or the org name in `GITHUB_OWNER` does not match     |
-| KMS answers `404 no PAT configured for "…"`           | `RUNNER_REGISTER_TO` owner has no `PAT_<owner>` on the KMS                     |
-| `config.sh` fails with `NotFound` from GitHub         | the token was rejected by GitHub (usually a PAT without runner permissions)     |
-| runner shows offline on GitHub after a restart        | it re-registers with `--replace`; stale entries disappear once a runner with the same name is back or after GitHub's cleanup |
-| jobs cannot mount volumes into containers             | see *Docker in jobs* above                                                     |
+| Symptom                                                    | Check                                                                                   |
+|------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| controller exits: `cannot reach the Docker daemon`         | `/var/run/docker.sock` must be mounted (see compose file)                               |
+| event `registration token: github api returned 401/403`    | PAT expired or lacks runner permissions for `GITHUB_OWNER`                              |
+| event `pull …: unauthorized` / `manifest unknown`          | runner package private → set `REGISTRY_USERNAME`/`REGISTRY_PASSWORD`; or wrong tag     |
+| runner shows `unregistered` for minutes                    | `docker logs <runner>`: `config.sh` output tells you what GitHub rejected               |
+| GitHub column says `unknown`                               | GitHub API unreachable; scaling continues, statuses return when it recovers             |
+| runners keep being `recreated`                             | they are unhealthy: `docker logs`, usually a token/permission problem at registration   |
 
 ## License
 
