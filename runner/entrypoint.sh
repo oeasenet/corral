@@ -38,7 +38,6 @@ if [ -n "${ADDITIONAL_PACKAGES:-}" ]; then
     # shellcheck disable=SC2086  # the package list is intentionally word-split
     apt-get install -y --no-install-recommends $packages
     apt-get clean
-    [ -d /var/lib/apt/lists ] && rm -rf /var/lib/apt/lists/*
 fi
 
 # --- KMS token retrieval -----------------------------------------------------
