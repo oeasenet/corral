@@ -66,7 +66,7 @@ jobs:
             -   uses: actions/setup-go@v7
                 with:
                     go-version-file: kms/go.mod
-                    cache-dependency-path: kms/go.sum
+                    cache: false   # no dependencies (stdlib only), so there is no go.sum to key a cache on
             -   name: KMS unit tests
                 working-directory: kms
                 run: |

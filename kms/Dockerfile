@@ -28,13 +28,14 @@ LABEL org.opencontainers.image.source="https://github.com/oeasenet/gha-docker-ru
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S kms \
-    && adduser -S -G kms -h /app kms
+    && addgroup -S -g 10001 kms \
+    && adduser -S -u 10001 -G kms -h /app kms
 
 WORKDIR /app
 COPY --from=builder /out/kms /usr/local/bin/kms
 
-USER kms
+# Numeric UID so runAsNonRoot-style policies can verify it.
+USER 10001:10001
 
 ENV PORT=3000 \
     CONFIG_FILE=/app/config.json
