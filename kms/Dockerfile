@@ -1,40 +1,47 @@
-# Build stage
-FROM golang:1.25-alpine AS builder
+# syntax=docker/dockerfile:1
 
-# Install git for fetching dependencies
-RUN apk add --no-cache git
+# ---- build stage -----------------------------------------------------------
+# Runs on the build host's native platform and cross-compiles for the target,
+# so multi-arch builds never need QEMU for the Go compiler.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
-# Set working directory
-WORKDIR /app
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
 
-# Copy go mod files
+WORKDIR /src
+
 COPY go.mod go.sum* ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
-# Download dependencies
-RUN go mod download
-
-# Copy source code
 COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/kms .
 
-# Build the binary (CGO disabled for static binary)
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags="-w -s" -o kms-server .
+# ---- runtime stage ---------------------------------------------------------
+FROM alpine:3.24
 
-# Final stage
-FROM alpine:latest
+LABEL org.opencontainers.image.source="https://github.com/oeasenet/gha-docker-runner" \
+      org.opencontainers.image.description="oease GitHub Runner KMS: exchanges GitHub PATs for short-lived runner registration tokens" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S kms \
+    && adduser -S -G kms -h /app kms
 
-WORKDIR /root/
+WORKDIR /app
+COPY --from=builder /out/kms /usr/local/bin/kms
 
-# Copy the binary from builder
-COPY --from=builder /app/kms-server .
+USER kms
 
-# Create empty config.json if it doesn't exist
-RUN touch config.json
+ENV PORT=3000 \
+    CONFIG_FILE=/app/config.json
 
-# Expose port
 EXPOSE 3000
 
-# Run the binary
-CMD ["./kms-server"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
+
+ENTRYPOINT ["kms"]

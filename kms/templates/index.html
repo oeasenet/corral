@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Runner KMS Dashboard</title>
+    <title>oease · GitHub Runner KMS</title>
     <style>
         * {
             margin: 0;
@@ -188,7 +188,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🚀 GitHub Runner KMS Dashboard</h1>
+        <h1>🚀 oease GitHub Runner KMS</h1>
 
         <div class="top-stats">
             <div class="top-stat-card">
@@ -215,6 +215,22 @@
                 <div class="stat">
                     <span class="stat-label">Uptime:</span>
                     <span class="stat-value">{{.Uptime}}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Version:</span>
+                    <span class="stat-value">{{.Version}}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Token endpoint auth:</span>
+                    {{if .AuthRequired}}
+                    <span class="stat-value" style="color: #10b981;">Bearer token required</span>
+                    {{else}}
+                    <span class="stat-value" style="color: #d97706;">⚠ Disabled (set KMS_AUTH_TOKEN)</span>
+                    {{end}}
+                </div>
+                <div class="stat">
+                    <span class="stat-label">GitHub API:</span>
+                    <span class="stat-value">{{.GitHubAPI}}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Success Rate:</span>
@@ -255,7 +271,7 @@
             </div>
 
             <div class="card">
-                <h2>🔑 Configured Organizations</h2>
+                <h2>🔑 Configured Owners</h2>
                 <ul class="org-list">
                     {{range .ConfiguredOrgs}}
                     <li class="org-item">{{.}}</li>
@@ -267,6 +283,9 @@
         <div class="card">
             <h2>🔗 API Endpoints</h2>
             <div class="endpoints">
+                {{if .AuthRequired}}
+                <p style="color: #666; margin-bottom: 10px;">Token endpoints require <code>Authorization: Bearer &lt;KMS_AUTH_TOKEN&gt;</code>.</p>
+                {{end}}
                 <div class="endpoint">
                     <span class="endpoint-label">Repository Registration Token:</span>
                     GET /repo/{owner}/{repo}/registration-token
@@ -300,6 +319,7 @@
 
         <div class="refresh-info">
             <p>Page refreshes every 30 seconds • API endpoints return JSON data</p>
+            <p style="margin-top: 8px;"><a href="https://github.com/oeasenet/gha-docker-runner" style="color: white;">oease / gha-docker-runner</a></p>
         </div>
     </div>
 
