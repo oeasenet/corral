@@ -156,6 +156,10 @@ GET    /health
 
 `ghcr.io/oeasenet/corral/runner:<flavor>` is the latest build of a flavor; `<flavor>-<runner version>`
 (e.g. `ubuntu-2.336.0`) pins the `actions/runner` release; `latest` is the default flavor (`ubuntu`).
+The same images are mirrored to Docker Hub as `oease/corral` (controller) and
+`oease/corral-runner:<flavor>`; to run a pool from the mirror, set its image override to
+`docker.io/oease/corral-runner:<flavor>` (GHCR stays the default because it does not rate-limit
+anonymous pulls).
 All flavors ship the same tooling: git, git-lfs, curl, jq, zip/unzip, build-essential, clang, cmake,
 Python 3, common dev headers, sudo, and the Docker CLI with buildx and compose. Images carry the labels
 `corral.flavor` and `corral.runner-version`.
@@ -204,7 +208,11 @@ arm64, always with the latest `actions/runner` release:
 - Mondays: the runner flavors, always (fresh base image digests, OS patches).
 
 It authenticates with the workflow's `GITHUB_TOKEN`; nothing to configure when you fork it — images land
-under your own `ghcr.io/<owner>/corral`. Dependabot keeps the actions and base images current.
+under your own `ghcr.io/<owner>/corral`. To mirror to Docker Hub as well, add the repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with read & write scope) and, if the images
+should live under an organization, the repository variable `DOCKERHUB_NAMESPACE`; the workflow then also
+pushes `<namespace>/corral` and `<namespace>/corral-runner:<flavor>`. Dependabot keeps the actions and
+base images current.
 
 ## Security notes
 
