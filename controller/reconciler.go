@@ -741,7 +741,7 @@ func (r *Reconciler) Snapshot(ctx context.Context) (State, error) {
 	s := r.settings.Get()
 	st := State{
 		Version: version, Target: r.cfg.Target.String(), GitHubURL: r.cfg.Target.URL(r.cfg.GitHubURL),
-		AutoUpdate: s.AutoUpdate, UpdateCheckInterval: r.cfg.UpdateInterval.String(),
+		AutoUpdate: s.AutoUpdate, UpdateCheckInterval: shortDuration(r.cfg.UpdateInterval),
 		LatestRunnerVersion: r.latestRunner.Load().(string), Runtimes: r.runtimeList(),
 		Events: r.events.List(), Pulling: r.pulling.Load(), GitHubError: r.githubErr.Load().(string),
 		LastPass: r.lastPassTime.Load().(time.Time), Now: time.Now(),
@@ -817,4 +817,15 @@ func (r *Reconciler) Snapshot(ctx context.Context) (State, error) {
 	}
 	sort.Slice(st.Orphans, func(i, j int) bool { return st.Orphans[i].Created.Before(st.Orphans[j].Created) })
 	return st, nil
+}
+
+// shortDuration renders a duration without trailing zero units: 1h, 15m, 1h30m.
+func shortDuration(d time.Duration) string {
+	out := d.String()
+	for _, zero := range []string{"0s", "0m"} {
+		if len(out) > len(zero) && strings.HasSuffix(out, zero) {
+			out = strings.TrimSuffix(out, zero)
+		}
+	}
+	return out
 }

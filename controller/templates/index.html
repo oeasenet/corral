@@ -5,109 +5,168 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>corral · {{.Target}}</title>
 <style>
+/* corral dashboard — light only. Calm control-panel look: soft gray page, white
+   cards with hairline borders, one purple accent, pastel status pills. The only
+   gradient is the brand mark. System fonts, no external assets. */
 :root {
-    --bg: #ffffff; --fg: #141414; --fg-2: #5c5c5c; --fg-3: #8f8f8f; --line: #e4e4e4; --panel: #fafafa;
-    --accent: #141414; --ok: #3a9d5d; --busy: #2b6cb0; --warn: #d29a2a; --bad: #c9403d; --mute: #b5b5b5;
+    --bg: #f6f7f9; --card: #ffffff; --border: #e5e7eb; --border-strong: #d1d5db;
+    --text: #111827; --text-2: #374151; --muted: #6b7280; --faint: #9ca3af;
+    --accent: #7461f9; --accent-ink: #ffffff; --accent-hover: #6653e8; --accent-soft: #f3f1ff; --accent-line: #d9d3ff;
+    --ok-bg: #d1fae5; --ok: #065f46; --info-bg: #dbeafe; --info: #1e40af;
+    --warn-bg: #fef3c7; --warn: #92400e; --bad-bg: #fee2e2; --bad: #991b1b; --gray-bg: #f3f4f6; --gray: #4b5563;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .1);
+    --radius: 10px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 14px; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--fg); background: var(--bg); line-height: 1.45; -webkit-font-smoothing: antialiased; }
-main { max-width: 1040px; margin: 0 auto; padding: 36px 24px 72px; }
-a { color: inherit; text-decoration: underline; text-decoration-color: var(--mute); text-underline-offset: 2px; }
-a:hover { text-decoration-color: var(--fg); }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--text); background: var(--bg); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
 code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
-h1 { font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
-h2 { font-size: 1rem; font-weight: 600; }
-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-header .sub { color: var(--fg-2); margin-top: 2px; }
-header .meta { display: flex; gap: 18px; align-items: center; color: var(--fg-2); flex-wrap: wrap; }
-header .meta label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-.notice { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--warn); background: var(--panel); color: var(--fg-2); }
-.notice.bad { border-left-color: var(--bad); }
-section.pool { margin-top: 28px; border: 1px solid var(--line); border-radius: 6px; }
-.pool .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
-.pool .head .title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.pool .head .title h2 { font-size: 1.05rem; }
-.badge { display: inline-block; padding: 1px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--fg-2); font-size: 0.82rem; }
-.pool .head .image { color: var(--fg-3); font-size: 0.85rem; }
-.pool .head .actions { display: flex; align-items: center; gap: 6px; }
-.count { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-.count span { min-width: 2.6em; text-align: center; padding: 0 6px; }
-.count button { border: 0; border-left: 1px solid var(--line); background: transparent; padding: 4px 9px; }
-.count button:first-child { border-left: 0; border-right: 1px solid var(--line); }
-button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
-button:hover { border-color: var(--fg-3); }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-button.primary:hover { opacity: 0.9; }
-button.quiet { border-color: transparent; color: var(--fg-2); }
-button.quiet:hover { border-color: var(--line); color: var(--fg); }
-button.danger { color: var(--bad); }
-button:disabled { opacity: 0.45; cursor: default; }
-.pool .body, section.orphans section.pool { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; border-top: 1px solid var(--line); }
-th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
-th { color: var(--fg-3); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
-td.actions { text-align: right; }
-td .actions-inline { display: inline-flex; gap: 4px; }
+h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
+
+/* top bar */
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--card); border-bottom: 1px solid var(--border); }
+.topbar .inner { max-width: 1120px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .mark { width: 20px; height: 20px; border-radius: 6px; background: linear-gradient(135deg, #7461f9 0%, #007ed5 60%, #02edcf 100%); box-shadow: 0 1px 2px rgba(49, 28, 120, .25); }
+.brand .wordmark { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
+.brand .target { color: var(--muted); padding-left: 12px; border-left: 1px solid var(--border); }
+.topbar .meta { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--muted); flex-wrap: wrap; font-size: 13px; }
+.topbar .meta b { color: var(--text-2); font-weight: 500; }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-2); }
+.switch input { appearance: none; width: 30px; height: 18px; border-radius: 999px; background: var(--border-strong); position: relative; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { transform: translateX(12px); }
+
+main { max-width: 1120px; margin: 0 auto; padding: 24px 24px 64px; }
+
+/* notices */
+.notice { padding: 10px 14px; border-radius: var(--radius); border: 1px solid #fcd34d; background: var(--warn-bg); color: var(--warn); margin-bottom: 16px; }
+.notice.bad { border-color: #fecaca; background: var(--bad-bg); color: var(--bad); }
+.notice.info { border-color: #bfdbfe; background: var(--info-bg); color: var(--info); }
+
+/* cards */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.stat { padding: 14px 16px; }
+.stat .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.stat .value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; color: var(--text); }
+.stat .value.accent { color: var(--accent); }
+
+.pool { margin-bottom: 20px; overflow: hidden; }
+.pool .head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.pool .title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pool .title h2 { font-size: 16px; }
+.pool .title .image { color: var(--muted); font-size: 12.5px; }
+.pool .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pool .hint-inline { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.pool .body { overflow-x: auto; }
+.empty { color: var(--muted); padding: 14px 18px; }
+
+/* pills */
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.info { background: var(--info-bg); color: var(--info); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.gray { background: var(--gray-bg); color: var(--gray); }
+.pill.accent { background: var(--accent-soft); color: var(--accent); }
+.pill.tag { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+
+/* buttons */
+.btn { font: inherit; font-size: 13px; font-weight: 500; color: var(--text-2); background: var(--card); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 12px; cursor: pointer; line-height: 1.3; transition: background .12s, border-color .12s, color .12s; }
+.btn:hover { background: var(--gray-bg); color: var(--text); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.quiet { border-color: transparent; background: transparent; }
+.btn.quiet:hover { background: var(--gray-bg); }
+.btn.link { border-color: transparent; background: transparent; color: var(--accent); padding: 4px 8px; }
+.btn.link:hover { background: var(--accent-soft); }
+.btn.danger { color: var(--bad); }
+.btn.danger:hover { background: var(--bad-bg); }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+.btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; background: var(--card); }
+.stepper button { border: 0; background: transparent; padding: 5px 10px; cursor: pointer; color: var(--accent); font-size: 15px; line-height: 1; }
+.stepper button:hover { background: var(--accent-soft); }
+.stepper span { min-width: 2.4em; text-align: center; font-weight: 600; border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 4px 6px; }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: #fafafa; }
+tbody tr:hover { background: var(--accent-soft); }
 tr:last-child td { border-bottom: 0; }
-.empty { color: var(--fg-3); padding: 12px 16px; border-top: 1px solid var(--line); }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); margin-right: 7px; vertical-align: 1px; }
-.dot.ok { background: var(--ok); } .dot.busy { background: var(--busy); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
-.tag { color: var(--fg-3); font-size: 0.85rem; margin-left: 6px; }
-details.settings { border-top: 1px solid var(--line); }
-details.settings summary { padding: 10px 16px; color: var(--fg-2); cursor: pointer; list-style: none; }
-details.settings summary::before { content: "▸ "; color: var(--fg-3); }
-details[open].settings summary::before { content: "▾ "; }
-form.pool-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 20px; padding: 4px 16px 16px; }
-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--fg-2); }
-form label.check { flex-direction: row; align-items: center; gap: 8px; }
-form input[type=text], form input[type=number], form select, form textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--fg); background: var(--bg); }
-form input:focus, form select:focus, form textarea:focus { outline: none; border-color: var(--fg-3); }
-form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-height: 56px; }
+td.actions { text-align: right; }
+td .tags { display: inline-flex; gap: 6px; margin-left: 8px; }
+
+/* pool settings */
+details.settings { border-top: 1px solid var(--border); background: #fafafa; }
+details.settings summary { padding: 10px 18px; color: var(--text-2); cursor: pointer; list-style: none; font-weight: 500; font-size: 13px; }
+details.settings summary::before { content: "▸"; display: inline-block; width: 14px; color: var(--faint); }
+details[open].settings summary::before { content: "▾"; }
+form.pool-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 20px; padding: 4px 18px 18px; background: var(--card); border-top: 1px solid var(--border); }
+form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+form label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+form input[type=text], form input[type=number], form select, form textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--card); }
+form input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-height: 60px; }
 form .full { grid-column: 1 / -1; }
 form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.hint { color: var(--fg-3); font-size: 0.8rem; font-weight: 400; }
-section.add { margin-top: 28px; }
-form.add-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+/* add pool */
+.add { border-style: dashed; box-shadow: none; padding: 14px 18px; margin-bottom: 24px; }
+form.add-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 form.add-form label { min-width: 160px; }
-section.orphans, section.events { margin-top: 32px; }
-section.events h2 { margin-bottom: 8px; }
-.events-list { border: 1px solid var(--line); border-radius: 6px; max-height: 320px; overflow-y: auto; font-size: 0.88rem; }
-.events-list div { display: flex; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--line); }
+
+/* events */
+.section-title { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 10px; }
+.section-title h2 { font-size: 15px; }
+.events-list { max-height: 340px; overflow-y: auto; font-size: 13px; }
+.events-list div { display: flex; gap: 12px; padding: 7px 16px; border-bottom: 1px solid var(--border); align-items: flex-start; }
 .events-list div:last-child { border-bottom: 0; }
-.events-list time { color: var(--fg-3); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; padding-top: 2px; }
+.events-list time { color: var(--faint); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding-top: 1px; }
 .events-list .WARN { color: var(--warn); } .events-list .ERROR { color: var(--bad); }
-footer { margin-top: 40px; color: var(--fg-3); font-size: 0.82rem; }
-#toast { position: fixed; bottom: 20px; right: 20px; background: var(--fg); color: #fff; padding: 10px 14px; border-radius: 6px; display: none; max-width: 420px; font-size: 0.9rem; }
+.events-list .lvl { flex: none; width: 52px; text-align: center; }
+
+footer { margin-top: 36px; color: var(--faint); font-size: 12.5px; display: flex; gap: 12px; }
+#toast { position: fixed; bottom: 20px; right: 20px; background: var(--text); color: #fff; padding: 10px 14px; border-radius: 8px; display: none; max-width: 420px; font-size: 13px; box-shadow: var(--shadow); }
 #toast.bad { background: var(--bad); }
-@media (max-width: 640px) { th:nth-child(4), td:nth-child(4) { display: none; } main { padding: 24px 14px 56px; } }
+@media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    main { padding: 16px 14px 48px; }
+    .topbar .inner { padding: 10px 14px; gap: 12px; }
+    .topbar .meta { margin-left: 0; }
+    th:nth-child(4), td:nth-child(4) { display: none; }
+}
 </style>
 </head>
 <body>
-<main>
-<header>
-    <div>
-        <h1>corral</h1>
-        <div class="sub">runners for <a href="{{.GitHubURL}}">{{.Target}}</a></div>
+<header class="topbar">
+    <div class="inner">
+        <div class="brand"><span class="mark"></span><span class="wordmark">corral</span><span class="target">runners for <a href="{{.GitHubURL}}">{{.Target}}</a></span></div>
+        <div class="meta" id="meta"></div>
     </div>
-    <div class="meta" id="meta"></div>
 </header>
-<div id="notices"></div>
-<div id="pools"></div>
-<section class="add">
-    <form class="add-form" id="add-pool">
-        <label>New pool <input type="text" name="name" placeholder="name (a-z, 0-9, -)" required pattern="[a-z0-9][a-z0-9-]{0,23}"></label>
-        <label>Runtime <select name="runtime" id="add-runtime"></select></label>
-        <label>Runners <input type="number" name="count" min="0" max="200" value="1"></label>
-        <button type="submit">Add pool</button>
-    </form>
-</section>
-<section class="orphans" id="orphans" hidden></section>
-<section class="events">
-    <h2>Events</h2>
-    <div class="events-list" id="events"></div>
-</section>
-<footer>corral {{.Version}} · <a href="https://github.com/oeasenet/corral">source</a></footer>
+<main>
+    <div id="notices"></div>
+    <section class="stats" id="stats"></section>
+    <div id="pools"></div>
+    <section class="card add">
+        <form class="add-form" id="add-pool">
+            <label>New pool <input type="text" name="name" placeholder="name (a-z, 0-9, -)" required pattern="[a-z0-9][a-z0-9-]{0,23}"></label>
+            <label>Runtime <select name="runtime" id="add-runtime"></select></label>
+            <label>Runners <input type="number" name="count" min="0" max="200" value="1"></label>
+            <button type="submit" class="btn primary">Add pool</button>
+        </form>
+    </section>
+    <section id="orphans" hidden></section>
+    <div class="section-title"><h2>Events</h2><span class="hint">newest first · also on the controller's stdout</span></div>
+    <section class="card events-list" id="events"></section>
+    <footer><span>corral {{.Version}}</span><span>·</span><a href="https://github.com/oeasenet/corral">source</a></footer>
 </main>
 <div id="toast" role="status"></div>
 <noscript><p style="padding:24px">This dashboard needs JavaScript.</p></noscript>
@@ -136,18 +195,24 @@ function age(iso) {
     if (s < 60) return Math.floor(s) + 's'; if (s < 3600) return Math.floor(s / 60) + 'm';
     if (s < 172800) return Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm'; return Math.floor(s / 86400) + 'd';
 }
-const dot = (cls, text) => '<span class="dot ' + cls + '"></span>' + esc(text);
+const pill = (cls, text) => '<span class="pill ' + cls + '">' + esc(text) + '</span>';
+const tag = (cls, text) => '<span class="pill tag ' + cls + '">' + esc(text) + '</span>';
 
 function runnerRow(r) {
-    let state = r.state === 'running' ? dot(r.health === 'unhealthy' ? 'bad' : r.health === 'starting' ? 'warn' : 'ok', r.health ? 'running · ' + r.health : 'running') : dot('warn', r.state);
-    let gh = r.github_status === 'online' ? dot(r.busy ? 'busy' : 'ok', r.busy ? 'busy' : 'idle') : r.github_status === 'offline' ? dot('bad', 'offline') : dot('', r.github_status);
-    let ver = r.runner_version ? '<span class="mono">' + esc(r.runner_version) + '</span>' : '<span class="mono">' + esc((r.generation || '').slice(0, 8)) + '</span>';
-    if (r.stale) ver += '<span class="tag">outdated</span>';
-    if (r.draining) ver += '<span class="tag">draining · ' + esc(r.drain_reason) + '</span>';
-    if (r.ephemeral) ver += '<span class="tag">ephemeral</span>';
-    const actions = r.draining ? '' : '<span class="actions-inline">' +
-        '<button class="quiet" data-runner="' + esc(r.name) + '" data-action="recreate">Recreate</button>' +
-        '<button class="quiet danger" data-runner="' + esc(r.name) + '" data-action="destroy">Destroy</button></span>';
+    const state = r.state === 'running'
+        ? pill(r.health === 'unhealthy' ? 'bad' : r.health === 'starting' ? 'warn' : 'ok', r.health ? 'running · ' + r.health : 'running')
+        : pill('warn', r.state);
+    const gh = r.github_status === 'online' ? (r.busy ? pill('info', 'busy') : pill('ok', 'idle'))
+        : r.github_status === 'offline' ? pill('bad', 'offline') : pill('gray', r.github_status);
+    let ver = '<span class="mono">' + esc(r.runner_version || (r.generation || '').slice(0, 8)) + '</span>';
+    const tags = [];
+    if (r.stale) tags.push(tag('warn', 'outdated'));
+    if (r.draining) tags.push(tag('warn', 'draining · ' + r.drain_reason));
+    if (r.ephemeral) tags.push(tag('gray', 'ephemeral'));
+    if (tags.length) ver += '<span class="tags">' + tags.join('') + '</span>';
+    const actions = r.draining ? '' :
+        '<button class="btn link small" data-runner="' + esc(r.name) + '" data-action="recreate">Recreate</button>' +
+        '<button class="btn quiet danger small" data-runner="' + esc(r.name) + '" data-action="destroy">Destroy</button>';
     return '<tr><td class="mono">' + esc(r.name) + '</td><td>' + state + '</td><td>' + gh + '</td><td>' + age(r.created) + '</td><td>' + ver + '</td><td class="actions">' + actions + '</td></tr>';
 }
 const TABLE_HEAD = '<thead><tr><th>Runner</th><th>Container</th><th>GitHub</th><th>Age</th><th>Runner version</th><th></th></tr></thead>';
@@ -155,6 +220,7 @@ const TABLE_HEAD = '<thead><tr><th>Runner</th><th>Container</th><th>GitHub</th><
 function runtimeOptions(selected) {
     return (current.runtimes || []).map(rt => '<option value="' + esc(rt.name) + '"' + (rt.name === selected ? ' selected' : '') + '>' + esc(rt.label) + '</option>').join('');
 }
+function runtimeLabel(name) { return (current.runtimes || []).find(r => r.name === name)?.label || name; }
 function poolForm(p) {
     return '<form class="pool-form" data-pool="' + esc(p.name) + '">' +
         '<label>Runtime <select name="runtime">' + runtimeOptions(p.runtime) + '</select></label>' +
@@ -166,16 +232,16 @@ function poolForm(p) {
         '<label class="full">Extra environment <span class="hint">KEY=value per line</span><textarea name="extra_env">' + esc(p.extra_env) + '</textarea></label>' +
         '<label class="check"><input type="checkbox" name="docker_socket"' + (p.docker_socket ? ' checked' : '') + '> Mount the host Docker socket</label>' +
         '<label class="check"><input type="checkbox" name="ephemeral"' + (p.ephemeral ? ' checked' : '') + '> Ephemeral (one job per container)</label>' +
-        '<div class="row"><button type="submit" class="primary">Save</button><button type="button" class="danger" data-delete="' + esc(p.name) + '">Delete pool</button><span class="hint">Changes that reshape runners roll them one at a time.</span></div></form>';
+        '<div class="row"><button type="submit" class="btn primary">Save</button><button type="button" class="btn danger" data-delete="' + esc(p.name) + '">Delete pool</button><span class="hint">Changes that reshape runners roll them one at a time.</span></div></form>';
 }
 function poolHead(p) {
     const latest = current.latest_runner_version;
-    let ver = p.runner_version ? 'runner ' + esc(p.runner_version) + (latest && latest !== p.runner_version ? ' <span class="tag">' + esc(latest) + ' available, image pending</span>' : latest ? ' <span class="tag">latest</span>' : '') : '';
-    return '<div class="title"><h2>' + esc(p.name) + '</h2><span class="badge">' + esc((current.runtimes.find(r => r.name === p.runtime) || {}).label || p.runtime) + '</span>' +
-        '<span class="image mono">' + esc(p.effective_image) + '</span>' + (ver ? '<span class="image">' + ver + '</span>' : '') + '</div>' +
-        '<div class="actions"><span class="hint">' + p.running + ' running' + (p.busy ? ', ' + p.busy + ' busy' : '') + '</span>' +
-        '<span class="count"><button data-scale="-1" data-pool="' + esc(p.name) + '" title="One runner fewer">−</button><span title="Desired runners">' + p.count + '</span><button data-scale="1" data-pool="' + esc(p.name) + '" title="One runner more">+</button></span>' +
-        '<button class="quiet" data-pull="' + esc(p.name) + '">Pull &amp; roll</button></div>';
+    let ver = '';
+    if (p.runner_version) ver = latest && latest !== p.runner_version ? pill('warn', 'runner ' + p.runner_version + ' · ' + latest + ' pending') : pill('gray', 'runner ' + p.runner_version + (latest ? ' · latest' : ''));
+    return '<div class="title"><h2>' + esc(p.name) + '</h2>' + tag('accent', runtimeLabel(p.runtime)) + '<span class="image mono">' + esc(p.effective_image) + '</span>' + ver + '</div>' +
+        '<div class="actions"><span class="hint-inline">' + p.running + ' running' + (p.busy ? ', ' + p.busy + ' busy' : '') + '</span>' +
+        '<span class="stepper"><button data-scale="-1" data-pool="' + esc(p.name) + '" title="One runner fewer">−</button><span title="Desired runners">' + p.count + '</span><button data-scale="1" data-pool="' + esc(p.name) + '" title="One runner more">+</button></span>' +
+        '<button class="btn small" data-pull="' + esc(p.name) + '">Pull &amp; roll</button></div>';
 }
 function renderPools(st) {
     const root = $('#pools');
@@ -185,7 +251,7 @@ function renderPools(st) {
         let sec = root.querySelector('section[data-pool="' + CSS.escape(p.name) + '"]');
         if (!sec) {
             sec = document.createElement('section');
-            sec.className = 'pool'; sec.dataset.pool = p.name;
+            sec.className = 'card pool'; sec.dataset.pool = p.name;
             sec.innerHTML = '<div class="head"></div><div class="body"></div><details class="settings"><summary>Pool settings</summary>' + poolForm(p) + '</details>';
             root.appendChild(sec);
         }
@@ -193,28 +259,38 @@ function renderPools(st) {
         $('.body', sec).innerHTML = p.runners.length ? '<table>' + TABLE_HEAD + '<tbody>' + p.runners.map(runnerRow).join('') + '</tbody></table>' : '<div class="empty">' + (p.count ? 'Starting runners…' : 'No runners; raise the count to start some.') + '</div>';
     }
     for (const sec of [...root.querySelectorAll('section.pool')]) if (!seen.has(sec.dataset.pool)) sec.remove();
-    if (!st.pools.length) root.innerHTML = '<div class="notice">No pools yet. Add one below.</div>';
+    if (!st.pools.length) root.innerHTML = '<div class="notice info">No pools yet — add one below.</div>';
+}
+function renderStats(st) {
+    const runners = [...st.pools.flatMap(p => p.runners), ...(st.orphans || [])];
+    const desired = st.pools.reduce((n, p) => n + p.count, 0);
+    const running = runners.filter(r => r.state === 'running' && !r.draining).length;
+    const busy = runners.filter(r => r.busy).length;
+    const draining = runners.filter(r => r.draining).length;
+    const cell = (label, value, accent) => '<div class="card stat"><div class="label">' + label + '</div><div class="value' + (accent ? ' accent' : '') + '">' + value + '</div></div>';
+    $('#stats').innerHTML = cell('Desired', desired) + cell('Running', running, true) + cell('Busy', busy) + cell('Draining', draining);
 }
 function render(st) {
     current = st;
-    $('#meta').innerHTML = '<span>last reconcile ' + esc(age(st.last_pass)) + ' ago</span>' +
-        (st.latest_runner_version ? '<span>latest runner <span class="mono">' + esc(st.latest_runner_version) + '</span></span>' : '') +
-        '<label><input type="checkbox" id="auto-update"' + (st.auto_update ? ' checked' : '') + '> auto-update every ' + esc(st.update_check_interval) + '</label>' +
-        '<button class="quiet" id="pull-all">Pull all</button><button class="quiet" id="reconcile">Reconcile</button>';
+    $('#meta').innerHTML = '<span>last reconcile <b>' + esc(age(st.last_pass)) + '</b> ago</span>' +
+        (st.latest_runner_version ? '<span>latest runner <b class="mono">' + esc(st.latest_runner_version) + '</b></span>' : '') +
+        '<label class="switch"><input type="checkbox" id="auto-update"' + (st.auto_update ? ' checked' : '') + '> auto-update · ' + esc(st.update_check_interval) + '</label>' +
+        '<button class="btn small" id="pull-all">Pull all</button><button class="btn small" id="reconcile">Reconcile</button>';
     let notices = '';
     if (st.docker_error) notices += '<div class="notice bad">Docker: ' + esc(st.docker_error) + '</div>';
     if (st.github_error) notices += '<div class="notice">GitHub API unavailable (runner status unknown, scaling continues): ' + esc(st.github_error) + '</div>';
-    if (st.pulling) notices += '<div class="notice">Pulling images…</div>';
+    if (st.pulling) notices += '<div class="notice info">Pulling images…</div>';
     $('#notices').innerHTML = notices;
+    renderStats(st);
     renderPools(st);
     const sel = $('#add-runtime');
     if (!sel.options.length) sel.innerHTML = runtimeOptions('ubuntu');
     const orphans = $('#orphans');
     if (st.orphans && st.orphans.length) {
         orphans.hidden = false;
-        orphans.innerHTML = '<h2>Retiring</h2><p class="hint">Runners of removed pools; they stop as they go idle.</p><section class="pool"><table>' + TABLE_HEAD + '<tbody>' + st.orphans.map(runnerRow).join('') + '</tbody></table></section>';
+        orphans.innerHTML = '<div class="section-title"><h2>Retiring</h2><span class="hint">runners of removed pools; they stop as they go idle</span></div><section class="card pool"><div class="body"><table>' + TABLE_HEAD + '<tbody>' + st.orphans.map(runnerRow).join('') + '</tbody></table></div></section>';
     } else { orphans.hidden = true; orphans.innerHTML = ''; }
-    $('#events').innerHTML = (st.events || []).map(e => '<div><time>' + new Date(e.time).toLocaleTimeString() + '</time><span class="' + esc(e.level) + '">' + esc(e.message) + '</span></div>').join('') || '<div class="hint">Nothing yet.</div>';
+    $('#events').innerHTML = (st.events || []).map(e => '<div><time>' + new Date(e.time).toLocaleTimeString() + '</time><span class="lvl ' + esc(e.level) + '">' + esc(e.level) + '</span><span class="' + esc(e.level) + '">' + esc(e.message) + '</span></div>').join('') || '<div class="hint">Nothing yet.</div>';
 }
 async function refresh() { try { render(await call('GET', '/api/state')); } catch (e) { console.error(e); } }
 
