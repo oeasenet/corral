@@ -6,7 +6,7 @@ ARG GITHUB_RUNNER_VERSION=2.336.0
 
 # ---- fetch the runner for the target architecture ---------------------------
 # Runs natively on the build host; it only downloads and unpacks a tarball.
-FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS runner-download
+FROM --platform=$BUILDPLATFORM ubuntu:26.04 AS runner-download
 
 ARG GITHUB_RUNNER_VERSION
 ARG TARGETARCH
@@ -27,7 +27,7 @@ RUN case "${TARGETARCH}" in \
     && rm runner.tar.gz
 
 # ---- runtime image ----------------------------------------------------------
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ARG GITHUB_RUNNER_VERSION
 ARG DEBIAN_FRONTEND=noninteractive
